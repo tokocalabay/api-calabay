@@ -47,7 +47,8 @@ module.exports = {
 
   // ── DEVELOPER API ─────────────────────────────────────
   API_PORT: Number(process.env.API_PORT || 5061),
-  API_DOCS_URL: process.env.API_BASE_URL || process.env.API_DOCS_URL || "https://api.yourdomain.com",
+  API_DOCS_URL: process.env.API_BASE_URL || process.env.API_DOCS_URL || "https://api.calabay.my.id",
+
 
 
 };

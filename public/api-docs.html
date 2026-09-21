@@ -511,34 +511,6 @@
       color: var(--accent);
     }
 
-    .preset-pills {
-      display: flex;
-      gap: 6px;
-      flex-wrap: wrap;
-    }
-
-    .preset-btn {
-      background: var(--bg-inset);
-      border: 1px solid var(--border);
-      color: var(--text-secondary);
-      font-size: 11px;
-      font-family: var(--sans);
-      padding: 4px 9px;
-      border-radius: 4px;
-      cursor: pointer;
-      transition: all 0.15s;
-    }
-
-    .preset-btn:hover {
-      color: var(--text-primary);
-      border-color: var(--border-focus);
-    }
-
-    .preset-btn.active {
-      background: var(--accent-dim);
-      border-color: var(--accent);
-      color: var(--text-primary);
-    }
 
     .base-url-input-wrap {
       display: flex;
@@ -1201,15 +1173,6 @@
           </svg>
           Quick Start (Code)
         </a>
-        <a href="#custom-domain-guide" class="nav-item">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-            <line x1="6" y1="6" x2="6.01" y2="6"/>
-            <line x1="6" y1="18" x2="6.01" y2="18"/>
-          </svg>
-          Setup Custom Domain
-        </a>
       </div>
     </nav>
   </aside>
@@ -1279,33 +1242,32 @@
             <line x1="2" y1="12" x2="22" y2="12"/>
             <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
           </svg>
-          Base URL & Custom Domain
+          Base URL API
         </h2>
         <p class="sec-desc">
-          API ini mendukung deployment Vercel, server Node.js mandiri, serta <strong>Custom Domain</strong> Anda sendiri.
-          Ubah domain di bawah ini untuk memperbarui seluruh contoh kode (cURL, Node.js, Python) secara langsung.
+          Semua request HTTP dikirimkan ke alamat server utama (Base URL) berikut:
         </p>
 
         <div class="base-url-card">
           <div class="base-url-header">
             <span class="base-url-title">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M4 17l6-6-6-6"/>
-                <path d="M12 19h8"/>
+                <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+                <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+                <line x1="6" y1="6" x2="6.01" y2="6"/>
+                <line x1="6" y1="18" x2="6.01" y2="18"/>
               </svg>
-              Konfigurasi Host Target
+              Production API Endpoint
             </span>
-            <div class="preset-pills">
-              <button class="preset-btn active" data-url="https://api.yourdomain.com">Custom Domain</button>
-              <button class="preset-btn" id="preset-origin">Current Host</button>
-              <button class="preset-btn" data-url="http://localhost:3000">Localhost (3000)</button>
-            </div>
+            <span class="status-badge" style="padding: 2px 8px; border-radius: 4px; background: var(--green-dim); color: var(--green); border: 1px solid var(--green-border);">
+              <span class="status-dot"></span> HTTPS Active
+            </span>
           </div>
 
           <div class="base-url-input-wrap">
-            <span class="base-url-prefix">BASE</span>
-            <input type="text" id="custom-domain-input" class="base-url-input" value="https://api.yourdomain.com/api/v1">
-            <button class="base-url-copy" id="btn-copy-base" title="Copy Base URL">
+            <span class="base-url-prefix">BASE URL</span>
+            <input type="text" id="custom-domain-input" class="base-url-input" value="https://api.calabay.my.id/api/v1" readonly>
+            <button class="base-url-copy" id="btn-copy-base" title="Salin Base URL">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
                 <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                 <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
@@ -1318,7 +1280,7 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
             </svg>
-            <span>Semua contoh cURL dan script di halaman ini langsung mengikuti domain yang Anda tentukan di atas.</span>
+            <span>Seluruh contoh cURL, Node.js, dan Python di bawah ini siap langsung Anda salin dan gunakan.</span>
           </div>
         </div>
       </section>
@@ -1527,10 +1489,10 @@
                 <thead><tr><th>Parameter</th><th>Tipe</th><th>Status</th><th>Deskripsi</th></tr></thead>
                 <tbody>
                   <tr>
-                    <td><code class="inline">provider</code></td>
+                    <td><code class="inline">server</code></td>
                     <td>string</td>
                     <td><span class="tag-opt">Opsional</span></td>
-                    <td>Filter provider: <code class="inline">wahub</code>, <code class="inline">engineunicorn</code>, <code class="inline">herosms</code>, <code class="inline">rumahotp</code></td>
+                    <td>Filter server: <code class="inline">server_1</code>, <code class="inline">server_2</code>, <code class="inline">sms_1</code>, <code class="inline">sms_2</code></td>
                   </tr>
                 </tbody>
               </table>
@@ -1548,7 +1510,7 @@
         <span class="jk">"name"</span>: <span class="js">"WhatsApp"</span>,
         <span class="jk">"price"</span>: <span class="jn">2500</span>,
         <span class="jk">"stock"</span>: <span class="jn">180</span>,
-        <span class="jk">"provider"</span>: <span class="js">"wahub"</span>,
+        <span class="jk">"server"</span>: <span class="js">"server_1"</span>,
         <span class="jk">"type"</span>: <span class="js">"whatsapp"</span>
       }
     ],
@@ -1558,7 +1520,7 @@
         <span class="jk">"name"</span>: <span class="js">"WhatsApp (SMS)"</span>,
         <span class="jk">"price"</span>: <span class="jn">3500</span>,
         <span class="jk">"stock"</span>: <span class="jn">500</span>,
-        <span class="jk">"provider"</span>: <span class="js">"herosms"</span>,
+        <span class="jk">"server"</span>: <span class="js">"sms_1"</span>,
         <span class="jk">"type"</span>: <span class="js">"sms"</span>
       }
     ]
@@ -1622,10 +1584,10 @@
                     <td>ID layanan dari daftar <code class="inline">/services</code></td>
                   </tr>
                   <tr>
-                    <td><code class="inline">provider</code></td>
+                    <td><code class="inline">server</code></td>
                     <td>string</td>
                     <td><span class="tag-req">Wajib</span></td>
-                    <td><code class="inline">wahub</code> | <code class="inline">engineunicorn</code> | <code class="inline">herosms</code> | <code class="inline">rumahotp</code></td>
+                    <td><code class="inline">server_1</code> | <code class="inline">server_2</code> | <code class="inline">sms_1</code> | <code class="inline">sms_2</code></td>
                   </tr>
                   <tr>
                     <td><code class="inline">country_id</code></td>
@@ -1648,7 +1610,7 @@
               <div class="code-panel-header"><span class="code-lang-tag">Payload JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
               <pre class="code-content">{
   <span class="jk">"service_id"</span>: <span class="js">"12"</span>,
-  <span class="jk">"provider"</span>: <span class="js">"wahub"</span>
+  <span class="jk">"server"</span>: <span class="js">"server_1"</span>
 }</pre>
             </div>
 
@@ -1661,7 +1623,7 @@
     <span class="jk">"order_id"</span>: <span class="js">"TRX_9281726481"</span>,
     <span class="jk">"phone"</span>: <span class="js">"+6281234567890"</span>,
     <span class="jk">"service"</span>: <span class="js">"WhatsApp"</span>,
-    <span class="jk">"provider"</span>: <span class="js">"wahub"</span>,
+    <span class="jk">"server"</span>: <span class="js">"server_1"</span>,
     <span class="jk">"price"</span>: <span class="jn">2500</span>,
     <span class="jk">"balance_after"</span>: <span class="jn">47500</span>,
     <span class="jk">"expires_at"</span>: <span class="js">"2026-09-22T02:24:00.000Z"</span>,
@@ -1821,7 +1783,7 @@
       <span class="jk">"phone"</span>: <span class="js">"+6281234567890"</span>,
       <span class="jk">"service"</span>: <span class="js">"WhatsApp"</span>,
       <span class="jk">"price"</span>: <span class="jn">2500</span>,
-      <span class="jk">"provider"</span>: <span class="js">"wahub"</span>,
+      <span class="jk">"server"</span>: <span class="js">"server_1"</span>,
       <span class="jk">"refunded"</span>: <span class="jb">false</span>,
       <span class="jk">"date"</span>: <span class="js">"2026-09-22T01:45:12.000Z"</span>
     }
@@ -1866,7 +1828,7 @@
 curl -X POST __BASE_URL__/order \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"service_id": "12", "provider": "wahub"}'
+  -d '{"service_id": "12", "server": "server_1"}'
 
 <span class="jc"># 2. Periksa status dan ambil kode OTP</span>
 curl -X GET __BASE_URL__/order/TRX_9281726481 \
@@ -1902,7 +1864,7 @@ async function getOtpFlow() {
     <span class="jc">// 1. Pesan nomor</span>
     const orderRes = await axios.post(
       `${BASE_URL}/order`,
-      { service_id: "12", provider: "wahub" },
+      { service_id: "12", server: "server_1" },
       { headers }
     );
     const order = orderRes.data.data;
@@ -1959,7 +1921,7 @@ def main():
     <span class="jc"># 1. Pesan nomor</span>
     res = requests.post(
         f"{BASE_URL}/order",
-        json={"service_id": "12", "provider": "wahub"},
+        json={"service_id": "12", "server": "server_1"},
         headers=headers
     ).json()
 
@@ -1988,45 +1950,10 @@ if __name__ == "__main__":
         </div>
       </section>
 
-      <!-- Custom Domain Guide -->
-      <section class="section" id="custom-domain-guide">
-        <h2 class="section-title">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
-            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
-            <line x1="6" y1="6" x2="6.01" y2="6"/>
-            <line x1="6" y1="18" x2="6.01" y2="18"/>
-          </svg>
-          Panduan Setup Custom Domain
-        </h2>
-        <p class="sec-desc">
-          Bila Anda ingin menghubungkan domain sendiri (misal <code class="inline">api.domainanda.com</code>) ke backend Vercel atau VPS:
-        </p>
-
-        <h3 class="sub-title">1. Setup di Vercel (Rekomendasi)</h3>
-        <ol class="steps-list">
-          <li>Buka <strong>Project Settings &rarr; Domains</strong> di dashboard Vercel Anda.</li>
-          <li>Masukkan domain atau subdomain Anda, contoh: <code class="inline">api.domainanda.com</code>.</li>
-          <li>Buka panel DNS domain Anda (Cloudflare, Niagahoster, Rumahweb, dll), lalu tambahkan DNS Record:
-            <br>Tipe: <code class="inline">CNAME</code> &middot; Name: <code class="inline">api</code> &middot; Value: <code class="inline">cname.vercel-dns.com</code>
-          </li>
-          <li>Vercel akan otomatis menerbitkan sertifikat SSL HTTPS gratis.</li>
-        </ol>
-
-        <h3 class="sub-title">2. Update Environment Variable Bot</h3>
-        <p class="sec-desc">
-          Agar bot Telegram membagikan tautan docs dan endpoint custom domain ke pengguna, atur variabel di <code class="inline">.env</code> atau Vercel Environment Variables:
-        </p>
-        <div class="code-panel">
-          <div class="code-panel-header"><span class="code-lang-tag">Environment Config</span></div>
-          <pre class="code-content">API_DOCS_URL=https://api.domainanda.com</pre>
-        </div>
-      </section>
-
       <!-- Footer -->
       <footer class="docs-footer">
         <div>
-          <span>OTP Service Developer API &middot; REST Specification</span>
+          <span>OTP Service API &middot; by Calabay</span>
         </div>
         <div>
           <span>Keamanan Terjamin &middot; Enkripsi TLS 1.3</span>
@@ -2040,17 +1967,7 @@ if __name__ == "__main__":
 <!-- Core Script -->
 <script>
   // ── State & Base URL Management ──
-  let activeBaseUrl = "https://api.yourdomain.com/api/v1";
-
-  // Auto detect host if not file://
-  if (window.location.protocol.startsWith("http")) {
-    const currentOrigin = window.location.origin;
-    const presetBtn = document.getElementById("preset-origin");
-    if (presetBtn) {
-      presetBtn.dataset.url = currentOrigin;
-      presetBtn.textContent = window.location.host;
-    }
-  }
+  let activeBaseUrl = "https://api.calabay.my.id/api/v1";
 
   const domainInput = document.getElementById("custom-domain-input");
   const copyBaseBtn = document.getElementById("btn-copy-base");
@@ -2058,12 +1975,11 @@ if __name__ == "__main__":
   function updateCodeSnippets(newBase) {
     activeBaseUrl = newBase.replace(/\/+$/, ""); // trim trailing slashes
     if (!activeBaseUrl.endsWith("/api/v1")) {
-      // Ensure /api/v1 suffix is cleanly formatted
       if (!activeBaseUrl.includes("/api/v1")) {
         activeBaseUrl += "/api/v1";
       }
     }
-    domainInput.value = activeBaseUrl;
+    if (domainInput) domainInput.value = activeBaseUrl;
 
     // Update all occurrences of __BASE_URL__ in code blocks
     document.querySelectorAll("pre.code-content").forEach(pre => {
@@ -2076,24 +1992,11 @@ if __name__ == "__main__":
 
   // Initial code update
   if (domainInput) {
-    domainInput.addEventListener("input", (e) => {
-      updateCodeSnippets(e.target.value.trim());
-    });
-    updateCodeSnippets(domainInput.value);
+    updateCodeSnippets(domainInput.value || activeBaseUrl);
+  } else {
+    updateCodeSnippets(activeBaseUrl);
   }
 
-  // Preset Buttons
-  document.querySelectorAll(".preset-btn").forEach(btn => {
-    btn.addEventListener("click", () => {
-      document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      const url = btn.dataset.url;
-      if (url) {
-        const fullUrl = url.endsWith("/api/v1") ? url : `${url}/api/v1`;
-        updateCodeSnippets(fullUrl);
-      }
-    });
-  });
 
   // Copy Base URL Button
   if (copyBaseBtn) {

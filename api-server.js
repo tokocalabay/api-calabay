@@ -85,11 +85,21 @@ function rupiah(n) {
 
 function normalizeProvider(provider) {
   const p = String(provider || "").trim().toLowerCase();
-  if (["wahub", "server1", "server_1", "wa1", "whatsapp1"].includes(p)) return "wahub";
-  if (["engineunicorn", "server2", "server_2", "wa2", "whatsapp2"].includes(p)) return "engineunicorn";
-  if (["herosms", "hero", "sms1", "sms_server1"].includes(p)) return "herosms";
-  if (["rumahotp", "rumah", "sms2", "sms_server2"].includes(p)) return "rumahotp";
+  if (["server_1", "server1", "wa1", "whatsapp1", "wahub"].includes(p)) return "wahub";
+  if (["server_2", "server2", "wa2", "whatsapp2", "engineunicorn"].includes(p)) return "engineunicorn";
+  if (["sms_1", "sms1", "sms_server1", "herosms", "hero"].includes(p)) return "herosms";
+  if (["sms_2", "sms2", "sms_server2", "rumahotp", "rumah"].includes(p)) return "rumahotp";
   return p;
+}
+
+function getPublicProviderCode(internalProvider) {
+  const map = {
+    wahub: "server_1",
+    engineunicorn: "server_2",
+    herosms: "sms_1",
+    rumahotp: "sms_2",
+  };
+  return map[internalProvider] || internalProvider;
 }
 
 function getProviderLabel(provider) {
@@ -98,8 +108,12 @@ function getProviderLabel(provider) {
     engineunicorn: "Server 2 (WhatsApp)",
     herosms: "Server 1 (SMS)",
     rumahotp: "Server 2 (SMS)",
+    server_1: "Server 1 (WhatsApp)",
+    server_2: "Server 2 (WhatsApp)",
+    sms_1: "Server 1 (SMS)",
+    sms_2: "Server 2 (SMS)",
   };
-  return labels[provider] || provider;
+  return labels[provider] || "Server 1";
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -110,7 +124,8 @@ function getProviderLabel(provider) {
 // List available OTP services
 router.get("/services", authMiddleware, async (req, res) => {
   try {
-    const provider = normalizeProvider(req.query.provider || "");
+    const rawP = req.query.provider || req.query.server || "";
+    const provider = normalizeProvider(rawP);
     const result = { whatsapp: [], sms: [] };
 
     // WhatsApp providers
@@ -125,10 +140,10 @@ router.get("/services", authMiddleware, async (req, res) => {
                 service_id: String(s.id),
                 name: s.name,
                 price: db.calculatePrice("wahub", s.price, s.id, req.apiUserId),
-                provider_price: s.price,
                 stock: s.stock,
-                provider: "wahub",
-                provider_label: "Server 1",
+                provider: "server_1",
+                server: "server_1",
+                server_label: "Server 1 (WhatsApp)",
                 type: "whatsapp",
               }))
           );
@@ -147,10 +162,10 @@ router.get("/services", authMiddleware, async (req, res) => {
                 service_id: String(s.id),
                 name: s.name,
                 price: db.calculatePrice("engineunicorn", s.price, s.id, req.apiUserId),
-                provider_price: s.price,
                 stock: Number(s.stock) || 0,
-                provider: "engineunicorn",
-                provider_label: "Server 2",
+                provider: "server_2",
+                server: "server_2",
+                server_label: "Server 2 (WhatsApp)",
                 type: "whatsapp",
               }))
           );
@@ -170,10 +185,10 @@ router.get("/services", authMiddleware, async (req, res) => {
                 service_id: String(s.id),
                 name: s.name,
                 price: db.calculatePrice("herosms", s.price || 0, s.id, req.apiUserId),
-                provider_price: s.price || 0,
                 stock: Number(s.stock) || 0,
-                provider: "herosms",
-                provider_label: "Server 1",
+                provider: "sms_1",
+                server: "sms_1",
+                server_label: "Server 1 (SMS)",
                 type: "sms",
               }))
           );
@@ -192,10 +207,10 @@ router.get("/services", authMiddleware, async (req, res) => {
                 service_id: String(s.id),
                 name: s.name,
                 price: db.calculatePrice("rumahotp", s.price || 0, s.id, req.apiUserId),
-                provider_price: s.price || 0,
                 stock: Number(s.stock) || 0,
-                provider: "rumahotp",
-                provider_label: "Server 2",
+                provider: "sms_2",
+                server: "sms_2",
+                server_label: "Server 2 (SMS)",
                 type: "sms",
               }))
           );
@@ -244,7 +259,8 @@ router.get("/balance", authMiddleware, (req, res) => {
 router.post("/order", authMiddleware, async (req, res) => {
   try {
     const uid = req.apiUserId;
-    const { service_id, provider: rawProvider, country_id, operator_id } = req.body || {};
+    const { service_id, provider: rawProvider, server: rawServer, country_id, operator_id } = req.body || {};
+    const chosenProvider = rawProvider || rawServer;
 
     if (!service_id) {
       return res.status(400).json({
@@ -252,19 +268,19 @@ router.post("/order", authMiddleware, async (req, res) => {
         error: { code: "MISSING_FIELD", message: "Field 'service_id' wajib diisi." },
       });
     }
-    if (!rawProvider) {
+    if (!chosenProvider) {
       return res.status(400).json({
         success: false,
-        error: { code: "MISSING_FIELD", message: "Field 'provider' wajib diisi. Pilihan: wahub, engineunicorn, herosms, rumahotp." },
+        error: { code: "MISSING_FIELD", message: "Field 'provider' atau 'server' wajib diisi. Pilihan: server_1, server_2, sms_1, sms_2." },
       });
     }
 
-    const provider = normalizeProvider(rawProvider);
+    const provider = normalizeProvider(chosenProvider);
     const validProviders = ["wahub", "engineunicorn", "herosms", "rumahotp"];
     if (!validProviders.includes(provider)) {
       return res.status(400).json({
         success: false,
-        error: { code: "INVALID_PROVIDER", message: `Provider '${rawProvider}' tidak valid. Pilihan: ${validProviders.join(", ")}` },
+        error: { code: "INVALID_PROVIDER", message: `Pilihan server '${chosenProvider}' tidak valid. Pilihan: server_1, server_2, sms_1, sms_2.` },
       });
     }
 
@@ -272,7 +288,7 @@ router.post("/order", authMiddleware, async (req, res) => {
     if (db.getProviderStatus(provider) === false) {
       return res.status(503).json({
         success: false,
-        error: { code: "PROVIDER_DISABLED", message: `Provider ${getProviderLabel(provider)} sedang dinonaktifkan.` },
+        error: { code: "PROVIDER_DISABLED", message: `Layanan ${getProviderLabel(provider)} sedang dinonaktifkan.` },
       });
     }
 
@@ -347,11 +363,11 @@ router.post("/order", authMiddleware, async (req, res) => {
         success: true,
         data: {
           order_id: trxId,
-          provider_order_id: order.order_id,
           phone: order.phone,
           service: serviceName,
-          provider: "wahub",
-          provider_label: "Server 1 (WhatsApp)",
+          provider: "server_1",
+          server: "server_1",
+          server_label: "Server 1 (WhatsApp)",
           price,
           balance_after: db.getCoin(uid),
           expires_at: new Date(expiryMs).toISOString(),
@@ -419,11 +435,11 @@ router.post("/order", authMiddleware, async (req, res) => {
         success: true,
         data: {
           order_id: trxId,
-          provider_order_id: order.order_id,
           phone: order.phone,
           service: serviceName,
-          provider: "engineunicorn",
-          provider_label: "Server 2 (WhatsApp)",
+          provider: "server_2",
+          server: "server_2",
+          server_label: "Server 2 (WhatsApp)",
           price,
           balance_after: db.getCoin(uid),
           expires_at: new Date(expiryMs).toISOString(),
@@ -437,7 +453,7 @@ router.post("/order", authMiddleware, async (req, res) => {
       if (!country_id) {
         return res.status(400).json({
           success: false,
-          error: { code: "MISSING_FIELD", message: "Field 'country_id' wajib untuk provider herosms." },
+          error: { code: "MISSING_FIELD", message: "Field 'country_id' wajib untuk layanan SMS." },
         });
       }
       const price_info = await herosms.getPrices(service_id, country_id);
@@ -488,11 +504,11 @@ router.post("/order", authMiddleware, async (req, res) => {
         success: true,
         data: {
           order_id: trxId,
-          provider_order_id: order.order_id,
           phone: order.phone_number,
           service: serviceName,
-          provider: "herosms",
-          provider_label: "Server 1 (SMS)",
+          provider: "sms_1",
+          server: "sms_1",
+          server_label: "Server 1 (SMS)",
           price,
           balance_after: db.getCoin(uid),
           status: "waiting",
@@ -504,7 +520,7 @@ router.post("/order", authMiddleware, async (req, res) => {
       if (!country_id) {
         return res.status(400).json({
           success: false,
-          error: { code: "MISSING_FIELD", message: "Field 'country_id' wajib untuk provider rumahotp." },
+          error: { code: "MISSING_FIELD", message: "Field 'country_id' wajib untuk layanan SMS." },
         });
       }
       serviceName = `SMS - ${service_id}`;
@@ -553,11 +569,11 @@ router.post("/order", authMiddleware, async (req, res) => {
         success: true,
         data: {
           order_id: trxId,
-          provider_order_id: order.order_id,
           phone: order.phone,
           service: serviceName,
-          provider: "rumahotp",
-          provider_label: "Server 2 (SMS)",
+          provider: "sms_2",
+          server: "sms_2",
+          server_label: "Server 2 (SMS)",
           price,
           balance_after: db.getCoin(uid),
           status: "waiting",
@@ -567,7 +583,7 @@ router.post("/order", authMiddleware, async (req, res) => {
 
     return res.status(400).json({
       success: false,
-      error: { code: "INVALID_PROVIDER", message: "Provider tidak dikenali." },
+      error: { code: "INVALID_PROVIDER", message: "Server tidak dikenali." },
     });
   } catch (error) {
     console.error("[API] Order error:", error);
@@ -638,14 +654,14 @@ router.get("/order/:id", authMiddleware, async (req, res) => {
         success: true,
         data: {
           order_id: orderId,
-          provider_order_id: sess.orderId,
           phone: sess.phone,
           status,
           otp: otp || null,
           sms_message: smsMessage || null,
           service: sess.serviceName,
-          provider: sess.provider || "wahub",
-          provider_label: getProviderLabel(sess.provider || "wahub"),
+          provider: getPublicProviderCode(sess.provider || "wahub"),
+          server: getPublicProviderCode(sess.provider || "wahub"),
+          server_label: getProviderLabel(sess.provider || "wahub"),
           price: sess.hargaUser,
           created_at: sess.createdAt,
           expires_at: sess.expiresAt ? new Date(sess.expiresAt).toISOString() : null,
@@ -660,14 +676,14 @@ router.get("/order/:id", authMiddleware, async (req, res) => {
         success: true,
         data: {
           order_id: trx.id,
-          provider_order_id: trx.orderId,
           phone: trx.phone,
           status: trx.refunded ? "refunded" : "completed",
           otp: null,
           sms_message: null,
           service: trx.productName,
-          provider: trx.provider,
-          provider_label: getProviderLabel(trx.provider),
+          provider: getPublicProviderCode(trx.provider),
+          server: getPublicProviderCode(trx.provider),
+          server_label: getProviderLabel(trx.provider),
           price: trx.harga,
           created_at: trx.date,
         },
@@ -844,12 +860,13 @@ router.get("/history", authMiddleware, (req, res) => {
       success: true,
       data: riwayat.map((t) => ({
         order_id: t.id,
-        provider_order_id: t.orderId,
         phone: t.phone,
         service: t.productName,
         country: t.negara,
         price: t.harga,
-        provider: t.provider,
+        provider: getPublicProviderCode(t.provider),
+        server: getPublicProviderCode(t.provider),
+        server_label: getProviderLabel(t.provider),
         refunded: t.refunded || false,
         date: t.date,
       })),
