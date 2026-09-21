@@ -25,7 +25,7 @@ const router = express.Router();
 // ══════════════════════════════════════════════════════════════
 
 // ── Auth middleware ──────────────────────────────────────────
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({
@@ -38,7 +38,7 @@ function authMiddleware(req, res, next) {
   }
 
   const key = authHeader.slice(7).trim();
-  const keyData = apiKeys.validateApiKey(key);
+  const keyData = await apiKeys.validateApiKey(key);
   if (!keyData) {
     return res.status(401).json({
       success: false,

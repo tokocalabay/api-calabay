@@ -1,3 +1,6 @@
+const dns = require("dns");
+try { dns.setServers(["8.8.8.8", "8.8.4.4", "1.1.1.1"]); } catch (_) {}
+
 const { Telegraf, Markup } = require("telegraf");
 const config = require("./config");
 const db     = require("./db");
@@ -7341,33 +7344,38 @@ async function restorePendingDeposits() {
       await wahubSessionDb.loadSessionsFromMongo();
     }
 
-    // 3. Launch Telegram Bot
-    await bot.launch();
-    syncRealtimeChannelToMandatoryJoin();
-    await restoreWahubPollers();
-    console.log("✅ Bot aktif! Polling WAHUB dipulihkan.");
-
-    await restorePendingDeposits();
-    console.log("⚡ Polling cepat pembayaran PanzzPay aktif!");
-
-    // 4. Initialize API Keys & Start Express API Server
+    // 3. Initialize API Keys & Start Express API Server
     try {
-      if (mongoConnected) await apiKeys.init();
+      if (mongoConnected) {
+        await apiKeys.init();
+      }
       const apiApp = createApiServer();
-      const apiPort = config.API_PORT || 3000;
+      const apiPort = config.API_PORT || 5061;
       apiApp.listen(apiPort, () => {
-        console.log(`🌐 [API Server] Developer API aktif di http://localhost:${apiPort}`);
+        console.log(`🌐 [API Server] Developer API aktif di port ${apiPort}`);
         console.log(`📖 [API Docs] http://localhost:${apiPort}/docs`);
       });
     } catch (apiErr) {
       console.error("⚠️ [API Server] Gagal start:", apiErr.message);
     }
 
-    // Jalankan auto-backup database setiap 1 jam sekali ke ID 7050529580
+    // 4. Jalankan auto-backup database setiap 1 jam sekali ke ID 7050529580
     setInterval(() => {
       performDatabaseBackup(BACKUP_TARGET_ID, false);
     }, BACKUP_INTERVAL_MS);
     console.log(`📦 Auto backup database aktif setiap 1 jam ke Telegram ID: ${BACKUP_TARGET_ID}`);
+
+    // 5. Restore background jobs & polling
+    syncRealtimeChannelToMandatoryJoin();
+    await restoreWahubPollers();
+    console.log("✅ Polling WAHUB dipulihkan.");
+
+    await restorePendingDeposits();
+    console.log("⚡ Polling cepat pembayaran PanzzPay aktif!");
+
+    // 6. Launch Telegram Bot
+    await bot.launch();
+    console.log("✅ Bot Telegram aktif!");
 
     // Cek auto-reset transaksi bulanan reseller saat startup
     try {
