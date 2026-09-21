@@ -12,6 +12,8 @@
   ],
   "routes": [
     { "src": "/api/v1/(.*)", "dest": "/api/index.js" },
+    { "src": "/favicon.svg", "dest": "/public/favicon.svg" },
+    { "src": "/favicon.ico", "dest": "/public/favicon.svg" },
     { "src": "/docs", "dest": "/public/api-docs.html" },
     { "src": "/docs/(.*)", "dest": "/public/api-docs.html" },
     { "src": "/", "dest": "/public/api-docs.html" }
