@@ -828,13 +828,15 @@ Beli nomor OTP virtual otomatis 24/7!${infoAktif}</blockquote>`;
         ["🛒 Buy Nokos",         "⭐ Reseller"],
         ["🪙 Coin & Deposit",    "📜 Transaction History"],
         ["❓ How to Order",      "👑 Top Buyer"],
-        ["💬 Admin",             "🎁 Referral"],
+        ["🔑 API Key",           "🎁 Referral"],
+        ["💬 Admin"],
       ]).resize()
     : Markup.keyboard([
         ["🛒 Beli Nokos",        "⭐ Reseller"],
         ["🪙 Coin & Deposit",    "📜 Riwayat Transaksi"],
         ["❓ Cara Order",        "👑 Top Buyer"],
-        ["💬 Admin",             "🎁 Referral"],
+        ["🔑 API Key",           "🎁 Referral"],
+        ["💬 Admin"],
       ]).resize();
 
   try {
@@ -6951,32 +6953,58 @@ ${topStr}
 });
 
 // ── /apikey — Developer API Key Management ────────────────
-bot.command("apikey", async (ctx) => {
+async function showApiKeyMenu(ctx) {
   const uid = ctx.from.id;
   db.registerUser(uid, ctx.from.username || ctx.from.first_name);
 
-  await ctx.replyWithHTML(
-    `<blockquote>🔑 <b>DEVELOPER API</b>
-━━━━━━━━━━━━━━━━
-Gunakan API untuk order OTP secara programmatic.
-Coin yang dipakai sama dengan akun bot kamu.
+  const docsUrl = config.API_DOCS_URL || "https://api.calabay.my.id";
 
-📖 Dokumentasi: <a href="${config.API_DOCS_URL}">${config.API_DOCS_URL}</a>
+  const messageText = `<blockquote>🔑 <b>DEVELOPER REST API</b>
 ━━━━━━━━━━━━━━━━
-Pilih menu di bawah:</blockquote>`,
-    {
-      parse_mode: "HTML",
-      disable_web_page_preview: true,
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔑 Generate API Key", callback_data: `apikey_gen_${uid}` }],
-          [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
-          [{ text: "🗑️ Revoke Semua API Key", callback_data: `apikey_revoke_all_${uid}` }],
-          [{ text: "📖 Buka API Docs", url: config.API_DOCS_URL }],
-        ],
-      },
+Gunakan API untuk order OTP secara otomatis dari program / script Anda.
+Saldo coin yang digunakan terhubung dengan akun bot Telegram Anda.
+
+📖 Dokumentasi: <a href="${docsUrl}">${docsUrl}</a>
+━━━━━━━━━━━━━━━━
+Pilih menu di bawah:</blockquote>`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
+      [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
+      [{ text: "🗑️ Revoke Semua API Key", callback_data: `apikey_revoke_all_${uid}` }],
+      [{ text: "📖 Buka API Docs", url: docsUrl }],
+    ],
+  };
+
+  if (ctx.callbackQuery) {
+    try {
+      await ctx.editMessageText(messageText, {
+        parse_mode: "HTML",
+        disable_web_page_preview: true,
+        reply_markup: keyboard,
+      });
+      return;
+    } catch {
+      // Fallback if edit not possible
     }
-  );
+  }
+
+  await ctx.replyWithHTML(messageText, {
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    reply_markup: keyboard,
+  });
+}
+
+bot.command("apikey", showApiKeyMenu);
+bot.hears(["🔑 API Key", "API Key", "apikey", "api key", "Developer API"], showApiKeyMenu);
+
+bot.action(/^apikey_menu_(\d+)$/, async (ctx) => {
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return ctx.answerCbQuery("❌ Bukan akun kamu.", { show_alert: true });
+  await ctx.answerCbQuery();
+  await showApiKeyMenu(ctx);
 });
 
 bot.action(/^apikey_gen_(\d+)$/, async (ctx) => {
@@ -6986,7 +7014,14 @@ bot.action(/^apikey_gen_(\d+)$/, async (ctx) => {
 
   const result = await apiKeys.generateApiKey(uid, "default");
   if (!result.success) {
-    return ctx.replyWithHTML(`<blockquote>❌ ${escapeHTML(result.error)}</blockquote>`);
+    return ctx.replyWithHTML(`<blockquote>❌ ${escapeHTML(result.error)}</blockquote>`, {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
+          [{ text: "🔙 Kembali ke Menu API", callback_data: `apikey_menu_${uid}` }],
+        ],
+      },
+    });
   }
 
   await ctx.replyWithHTML(
@@ -7001,7 +7036,15 @@ bot.action(/^apikey_gen_(\d+)$/, async (ctx) => {
 <code>Authorization: Bearer ${result.key}</code>
 
 Base URL: <code>${config.API_DOCS_URL}/api/v1</code>
-📖 Docs: ${config.API_DOCS_URL}</blockquote>`
+📖 Docs: ${config.API_DOCS_URL}</blockquote>`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
+          [{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }],
+        ],
+      },
+    }
   );
 });
 
@@ -7012,7 +7055,14 @@ bot.action(/^apikey_list_(\d+)$/, async (ctx) => {
 
   const keys = await apiKeys.listApiKeys(uid);
   if (!keys.length) {
-    return ctx.replyWithHTML("<blockquote>📋 Kamu belum punya API key. Gunakan /apikey untuk membuat.</blockquote>");
+    return ctx.replyWithHTML("<blockquote>📋 Kamu belum punya API key. Tekan tombol di bawah untuk membuat.</blockquote>", {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔑 Buat API Key Sekarang", callback_data: `apikey_gen_${uid}` }],
+          [{ text: "🔙 Kembali ke Menu API", callback_data: `apikey_menu_${uid}` }],
+        ],
+      },
+    });
   }
 
   const lines = keys.map((k, i) => {
@@ -7029,7 +7079,16 @@ bot.action(/^apikey_list_(\d+)$/, async (ctx) => {
 ━━━━━━━━━━━━━━━━
 ${lines}
 ━━━━━━━━━━━━━━━━
-Max: ${apiKeys.MAX_KEYS_PER_USER} key per akun</blockquote>`
+Max: ${apiKeys.MAX_KEYS_PER_USER} key per akun</blockquote>`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
+          [{ text: "🗑️ Revoke Semua", callback_data: `apikey_revoke_all_${uid}` }],
+          [{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }],
+        ],
+      },
+    }
   );
 });
 
@@ -7043,7 +7102,15 @@ bot.action(/^apikey_revoke_all_(\d+)$/, async (ctx) => {
     `<blockquote>🗑️ <b>SEMUA API KEY DIREVOKE</b>
 ━━━━━━━━━━━━━━━━
 ${result.count > 0 ? `✅ ${result.count} key berhasil direvoke.` : "Tidak ada key aktif untuk direvoke."}
-Gunakan /apikey untuk membuat key baru.</blockquote>`
+Gunakan tombol di bawah untuk membuat key baru.</blockquote>`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
+          [{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }],
+        ],
+      },
+    }
   );
 });
 
