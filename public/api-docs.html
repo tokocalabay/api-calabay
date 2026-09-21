@@ -1,0 +1,2220 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Developer API Documentation — OTP Service</title>
+  <meta name="description" content="Dokumentasi REST API resmi untuk layanan OTP WhatsApp dan SMS. Integrasi cepat dengan cURL, Node.js, dan Python.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg-body: #09090b;
+      --bg-sidebar: #0e0e11;
+      --bg-card: #131317;
+      --bg-card-hover: #17171d;
+      --bg-inset: #0a0a0d;
+      --bg-highlight: rgba(255, 255, 255, 0.04);
+      --border: #23232a;
+      --border-subtle: #1a1a20;
+      --border-focus: #3f3f4e;
+      --text-primary: #f4f4f7;
+      --text-secondary: #9da0ae;
+      --text-muted: #5e6070;
+      
+      --accent: #6366f1;
+      --accent-hover: #4f46e5;
+      --accent-dim: rgba(99, 102, 241, 0.12);
+      
+      --green: #10b981;
+      --green-dim: rgba(16, 185, 129, 0.12);
+      --green-border: rgba(16, 185, 129, 0.25);
+      
+      --blue: #3b82f6;
+      --blue-dim: rgba(59, 130, 246, 0.12);
+      --blue-border: rgba(59, 130, 246, 0.25);
+      
+      --amber: #f59e0b;
+      --amber-dim: rgba(245, 158, 11, 0.12);
+      --amber-border: rgba(245, 158, 11, 0.25);
+      
+      --red: #ef4444;
+      --red-dim: rgba(239, 68, 68, 0.12);
+      --red-border: rgba(239, 68, 68, 0.25);
+      
+      --mono: 'JetBrains Mono', monospace;
+      --sans: 'Inter', system-ui, -apple-system, sans-serif;
+      --radius: 8px;
+    }
+
+    html {
+      scroll-behavior: smooth;
+      scroll-padding-top: 32px;
+    }
+
+    body {
+      font-family: var(--sans);
+      background-color: var(--bg-body);
+      color: var(--text-primary);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+
+    /* ── Layout ── */
+    .app-layout {
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      position: sticky;
+      top: 0;
+      width: 270px;
+      height: 100vh;
+      flex-shrink: 0;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      z-index: 20;
+    }
+
+    .sidebar::-webkit-scrollbar {
+      width: 4px;
+    }
+    .sidebar::-webkit-scrollbar-thumb {
+      background: var(--border);
+      border-radius: 4px;
+    }
+
+    .sidebar-header {
+      padding: 24px 20px 18px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .brand-wrap {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .brand-icon {
+      width: 32px;
+      height: 32px;
+      border-radius: 8px;
+      background: var(--accent-dim);
+      border: 1px solid rgba(99, 102, 241, 0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--accent);
+      flex-shrink: 0;
+    }
+
+    .brand-title {
+      font-size: 14px;
+      font-weight: 700;
+      letter-spacing: -0.2px;
+      color: var(--text-primary);
+      line-height: 1.2;
+    }
+
+    .brand-subtitle {
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .search-box {
+      margin: 16px 20px 8px;
+      position: relative;
+    }
+
+    .search-box input {
+      width: 100%;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px 7px 32px;
+      font-size: 12px;
+      font-family: var(--sans);
+      color: var(--text-primary);
+      outline: none;
+      transition: border-color 0.15s;
+    }
+
+    .search-box input:focus {
+      border-color: var(--accent);
+    }
+
+    .search-box svg {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 14px;
+      height: 14px;
+      color: var(--text-muted);
+      pointer-events: none;
+    }
+
+    .sidebar-nav {
+      padding: 12px 0 32px;
+      flex: 1;
+    }
+
+    .nav-group {
+      margin-bottom: 20px;
+    }
+
+    .nav-label {
+      padding: 6px 20px;
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.8px;
+      color: var(--text-muted);
+    }
+
+    .nav-item {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 7px 20px;
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-secondary);
+      text-decoration: none;
+      border-left: 2px solid transparent;
+      transition: all 0.15s ease;
+    }
+
+    .nav-item:hover {
+      color: var(--text-primary);
+      background: var(--bg-highlight);
+    }
+
+    .nav-item.active {
+      color: var(--text-primary);
+      background: var(--accent-dim);
+      border-left-color: var(--accent);
+    }
+
+    .nav-item svg {
+      width: 15px;
+      height: 15px;
+      flex-shrink: 0;
+      color: var(--text-muted);
+    }
+
+    .nav-item.active svg {
+      color: var(--accent);
+    }
+
+    .nav-method {
+      font-family: var(--mono);
+      font-size: 9px;
+      font-weight: 700;
+      padding: 1px 5px;
+      border-radius: 3px;
+      margin-left: auto;
+    }
+
+    .nav-method.get { background: var(--green-dim); color: var(--green); }
+    .nav-method.post { background: var(--blue-dim); color: var(--blue); }
+
+    /* ── Main Container ── */
+    .main-wrap {
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Mobile Header ── */
+    .mobile-header {
+      display: none;
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      background: rgba(14, 14, 17, 0.9);
+      backdrop-filter: blur(12px);
+      border-bottom: 1px solid var(--border);
+      padding: 12px 18px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .mobile-brand {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 14px;
+      font-weight: 700;
+    }
+
+    .mobile-menu-btn {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      color: var(--text-primary);
+      border-radius: 6px;
+      padding: 6px 10px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    /* ── Mobile Drawer ── */
+    .mobile-drawer {
+      display: none;
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.75);
+      backdrop-filter: blur(4px);
+      z-index: 100;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .mobile-drawer.open {
+      display: block;
+      opacity: 1;
+    }
+
+    .mobile-drawer-content {
+      width: 290px;
+      max-width: 85vw;
+      height: 100%;
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border);
+      overflow-y: auto;
+      padding: 20px 0;
+      transform: translateX(-100%);
+      transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+      scrollbar-width: none;
+      -ms-overflow-style: none;
+    }
+
+    .mobile-drawer-content::-webkit-scrollbar {
+      display: none;
+      width: 0;
+    }
+
+    .mobile-drawer.open .mobile-drawer-content {
+      transform: translateX(0);
+    }
+
+    .mobile-drawer-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px 16px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .close-btn {
+      background: transparent;
+      border: none;
+      color: var(--text-muted);
+      cursor: pointer;
+      display: flex;
+      padding: 4px;
+    }
+
+    /* ── Main Content Area ── */
+    .content-body {
+      padding: 48px 56px 96px;
+      max-width: 900px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* ── Top Status Bar ── */
+    .system-status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 10px 16px;
+      margin-bottom: 36px;
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .status-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--green);
+      box-shadow: 0 0 8px rgba(16, 185, 129, 0.5);
+    }
+
+    .quick-links {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .quick-link {
+      font-size: 12px;
+      color: var(--text-secondary);
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: color 0.15s;
+    }
+
+    .quick-link:hover {
+      color: var(--text-primary);
+    }
+
+    .quick-link svg {
+      width: 13px;
+      height: 13px;
+    }
+
+    /* ── Typography & Headings ── */
+    h1.page-title {
+      font-size: 32px;
+      font-weight: 700;
+      letter-spacing: -0.6px;
+      color: var(--text-primary);
+      line-height: 1.2;
+      margin-bottom: 12px;
+    }
+
+    p.lead-text {
+      font-size: 15px;
+      color: var(--text-secondary);
+      line-height: 1.7;
+      margin-bottom: 24px;
+    }
+
+    .section {
+      margin-bottom: 56px;
+      scroll-margin-top: 32px;
+    }
+
+    .section-title {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 14px;
+      padding-bottom: 10px;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .section-title svg {
+      width: 20px;
+      height: 20px;
+      color: var(--accent);
+    }
+
+    .sub-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-primary);
+      margin: 20px 0 8px;
+    }
+
+    p.sec-desc {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 14px;
+    }
+
+    /* ── Metrics Grid ── */
+    .metrics-grid {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 12px;
+      margin: 24px 0 36px;
+    }
+
+    .metric-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 14px 16px;
+    }
+
+    .metric-val {
+      font-size: 20px;
+      font-weight: 700;
+      color: var(--text-primary);
+      font-family: var(--mono);
+    }
+
+    .metric-lbl {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-muted);
+      margin-top: 2px;
+    }
+
+    /* ── Base URL & Custom Domain Interactive Box ── */
+    .base-url-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 18px 20px;
+      margin: 16px 0 24px;
+    }
+
+    .base-url-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+
+    .base-url-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      display: flex;
+      align-items: center;
+      gap: 7px;
+    }
+
+    .base-url-title svg {
+      width: 15px;
+      height: 15px;
+      color: var(--accent);
+    }
+
+    .preset-pills {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .preset-btn {
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 11px;
+      font-family: var(--sans);
+      padding: 4px 9px;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .preset-btn:hover {
+      color: var(--text-primary);
+      border-color: var(--border-focus);
+    }
+
+    .preset-btn.active {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: var(--text-primary);
+    }
+
+    .base-url-input-wrap {
+      display: flex;
+      align-items: stretch;
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+
+    .base-url-input-wrap:focus-within {
+      border-color: var(--accent);
+    }
+
+    .base-url-prefix {
+      display: flex;
+      align-items: center;
+      padding: 0 12px;
+      background: var(--bg-highlight);
+      border-right: 1px solid var(--border);
+      font-family: var(--mono);
+      font-size: 12px;
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .base-url-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      padding: 10px 14px;
+      font-family: var(--mono);
+      font-size: 13px;
+      color: var(--text-primary);
+      outline: none;
+      min-width: 0;
+    }
+
+    .base-url-copy {
+      background: transparent;
+      border: none;
+      border-left: 1px solid var(--border);
+      padding: 0 14px;
+      color: var(--text-secondary);
+      font-size: 12px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-family: var(--sans);
+      transition: all 0.15s;
+    }
+
+    .base-url-copy:hover {
+      color: var(--text-primary);
+      background: var(--bg-highlight);
+    }
+
+    .base-url-hint {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-top: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .base-url-hint svg {
+      width: 13px;
+      height: 13px;
+      flex-shrink: 0;
+    }
+
+    /* ── Code Blocks ── */
+    .code-panel {
+      background: var(--bg-inset);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin: 12px 0 18px;
+      overflow: hidden;
+    }
+
+    .code-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      background: rgba(255, 255, 255, 0.02);
+      border-bottom: 1px solid var(--border);
+      font-size: 11px;
+      color: var(--text-muted);
+      user-select: none;
+    }
+
+    .code-lang-tag {
+      font-family: var(--mono);
+      font-weight: 500;
+      color: var(--text-secondary);
+    }
+
+    .copy-action-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 3px 8px;
+      font-size: 11px;
+      font-family: var(--sans);
+      color: var(--text-muted);
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      transition: all 0.15s;
+    }
+
+    .copy-action-btn:hover {
+      color: var(--text-primary);
+      border-color: var(--border-focus);
+    }
+
+    .copy-action-btn.copied {
+      border-color: var(--green-border);
+      color: var(--green);
+      background: var(--green-dim);
+    }
+
+    .copy-action-btn svg {
+      width: 12px;
+      height: 12px;
+    }
+
+    pre.code-content {
+      padding: 14px 16px;
+      overflow-x: auto;
+      font-family: var(--mono);
+      font-size: 12.5px;
+      line-height: 1.65;
+      color: var(--text-primary);
+      tab-size: 2;
+    }
+
+    code.inline {
+      font-family: var(--mono);
+      font-size: 12px;
+      background: var(--bg-inset);
+      padding: 2px 6px;
+      border-radius: 4px;
+      border: 1px solid var(--border);
+      color: #cbd5e1;
+    }
+
+    /* JSON highlighting */
+    .jk { color: #818cf8; } /* key */
+    .js { color: #34d399; } /* string */
+    .jn { color: #fbbf24; } /* number */
+    .jb { color: #f472b6; } /* boolean */
+    .jc { color: #64748b; } /* comment */
+
+    /* ── Responsive Tables ── */
+    .table-responsive {
+      width: 100%;
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      margin: 12px 0 20px;
+      background: var(--bg-card);
+    }
+
+    table.data-table {
+      width: 100%;
+      border-collapse: collapse;
+      text-align: left;
+      font-size: 13px;
+      min-width: 500px;
+    }
+
+    table.data-table th {
+      padding: 10px 14px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+      background: rgba(255, 255, 255, 0.015);
+    }
+
+    table.data-table td {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      color: var(--text-secondary);
+      vertical-align: top;
+    }
+
+    table.data-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .tag-req {
+      font-family: var(--mono);
+      font-size: 10px;
+      font-weight: 700;
+      color: var(--amber);
+      background: var(--amber-dim);
+      padding: 2px 5px;
+      border-radius: 3px;
+      border: 1px solid var(--amber-border);
+    }
+
+    .tag-opt {
+      font-family: var(--mono);
+      font-size: 10px;
+      color: var(--text-muted);
+      background: var(--bg-inset);
+      padding: 2px 5px;
+      border-radius: 3px;
+      border: 1px solid var(--border);
+    }
+
+    /* ── Notice Callouts ── */
+    .callout {
+      display: flex;
+      align-items: flex-start;
+      gap: 12px;
+      padding: 14px 16px;
+      border-radius: var(--radius);
+      font-size: 13px;
+      line-height: 1.55;
+      margin: 14px 0 20px;
+    }
+
+    .callout svg {
+      width: 18px;
+      height: 18px;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .callout-info {
+      background: var(--blue-dim);
+      border: 1px solid var(--blue-border);
+      color: #93c5fd;
+    }
+    .callout-info svg { color: var(--blue); }
+
+    .callout-warning {
+      background: var(--amber-dim);
+      border: 1px solid var(--amber-border);
+      color: #fcd34d;
+    }
+    .callout-warning svg { color: var(--amber); }
+
+    /* ── Endpoint Accordion Cards ── */
+    .endpoint-card {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg-card);
+      margin-bottom: 14px;
+      overflow: hidden;
+      transition: border-color 0.15s;
+    }
+
+    .endpoint-card:hover {
+      border-color: var(--border-focus);
+    }
+
+    .endpoint-trigger {
+      display: flex;
+      align-items: center;
+      padding: 14px 16px;
+      cursor: pointer;
+      user-select: none;
+      gap: 12px;
+      transition: background 0.15s;
+    }
+
+    .endpoint-trigger:hover {
+      background: var(--bg-card-hover);
+    }
+
+    .badge-method {
+      font-family: var(--mono);
+      font-size: 11px;
+      font-weight: 700;
+      padding: 3px 8px;
+      border-radius: 4px;
+      min-width: 52px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+
+    .badge-method.get {
+      background: var(--green-dim);
+      color: var(--green);
+      border: 1px solid var(--green-border);
+    }
+
+    .badge-method.post {
+      background: var(--blue-dim);
+      color: var(--blue);
+      border: 1px solid var(--blue-border);
+    }
+
+    .endpoint-route {
+      font-family: var(--mono);
+      font-size: 13px;
+      font-weight: 600;
+      color: var(--text-primary);
+      word-break: break-all;
+    }
+
+    .endpoint-summary {
+      font-size: 13px;
+      color: var(--text-muted);
+      margin-left: auto;
+      text-align: right;
+    }
+
+    .endpoint-chevron {
+      color: var(--text-muted);
+      transition: transform 0.2s ease;
+      flex-shrink: 0;
+      margin-left: 8px;
+    }
+
+    .endpoint-card.expanded .endpoint-chevron {
+      transform: rotate(180deg);
+    }
+
+    .endpoint-content {
+      display: none;
+      padding: 16px 20px 20px;
+      border-top: 1px solid var(--border);
+      background: var(--bg-sidebar);
+    }
+
+    .endpoint-card.expanded .endpoint-content {
+      display: block;
+    }
+
+    /* ── Code Tabs ── */
+    .tab-bar {
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--border);
+      margin-top: 16px;
+    }
+
+    .tab-item {
+      background: transparent;
+      border: none;
+      border-bottom: 2px solid transparent;
+      padding: 8px 14px;
+      font-family: var(--sans);
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+
+    .tab-item:hover {
+      color: var(--text-secondary);
+    }
+
+    .tab-item.active {
+      color: var(--accent);
+      border-bottom-color: var(--accent);
+    }
+
+    .tab-pane {
+      display: none;
+    }
+
+    .tab-pane.active {
+      display: block;
+    }
+
+    /* ── Ordered List ── */
+    ol.steps-list {
+      padding-left: 20px;
+      margin: 10px 0 16px;
+    }
+
+    ol.steps-list li {
+      font-size: 14px;
+      color: var(--text-secondary);
+      margin-bottom: 6px;
+    }
+
+    /* ── Footer ── */
+    .docs-footer {
+      border-top: 1px solid var(--border);
+      margin-top: 48px;
+      padding-top: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 16px;
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    /* ── Responsive Queries ── */
+    @media (max-width: 900px) {
+      .sidebar {
+        display: none;
+      }
+      .mobile-header {
+        display: flex;
+      }
+      .content-body {
+        padding: 24px 20px 64px;
+      }
+      .metrics-grid {
+        grid-template-columns: repeat(2, 1fr);
+      }
+      .endpoint-trigger {
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .endpoint-summary {
+        width: 100%;
+        text-align: left;
+        margin-left: 0;
+        font-size: 12px;
+      }
+      .endpoint-chevron {
+        margin-left: auto;
+      }
+      h1.page-title {
+        font-size: 26px;
+      }
+    }
+
+    @media (max-width: 480px) {
+      .metrics-grid {
+        grid-template-columns: 1fr;
+      }
+      .base-url-header {
+        flex-direction: column;
+        align-items: flex-start;
+      }
+      .base-url-input-wrap {
+        flex-direction: column;
+      }
+      .base-url-prefix {
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+        padding: 6px 12px;
+      }
+      .base-url-copy {
+        border-left: none;
+        border-top: 1px solid var(--border);
+        padding: 8px 12px;
+        justify-content: center;
+      }
+    }
+  </style>
+</head>
+<body>
+
+<!-- Mobile Header -->
+<header class="mobile-header">
+  <div class="mobile-brand">
+    <div class="brand-icon">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+        <rect x="4" y="4" width="16" height="16" rx="2"/>
+        <rect x="9" y="9" width="6" height="6"/>
+        <line x1="9" y1="1" x2="9" y2="4"/>
+        <line x1="15" y1="1" x2="15" y2="4"/>
+        <line x1="9" y1="20" x2="9" y2="23"/>
+        <line x1="15" y1="20" x2="15" y2="23"/>
+        <line x1="20" y1="9" x2="23" y2="9"/>
+        <line x1="20" y1="14" x2="23" y2="14"/>
+        <line x1="1" y1="9" x2="4" y2="9"/>
+        <line x1="1" y1="14" x2="4" y2="14"/>
+      </svg>
+    </div>
+    <span>OTP API Docs</span>
+  </div>
+  <button class="mobile-menu-btn" id="mobile-menu-toggle" aria-label="Buka Menu">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="16" height="16">
+      <line x1="3" y1="12" x2="21" y2="12"/>
+      <line x1="3" y1="6" x2="21" y2="6"/>
+      <line x1="3" y1="18" x2="21" y2="18"/>
+    </svg>
+    <span>Menu</span>
+  </button>
+</header>
+
+<!-- Mobile Navigation Drawer -->
+<div class="mobile-drawer" id="mobile-drawer">
+  <div class="mobile-drawer-content">
+    <div class="mobile-drawer-header">
+      <div class="brand-wrap">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+            <rect x="9" y="9" width="6" height="6"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">OTP Service</div>
+          <div class="brand-subtitle">Developer Portal</div>
+        </div>
+      </div>
+      <button class="close-btn" id="mobile-drawer-close" aria-label="Tutup Menu">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="20" height="20">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+
+    <nav class="sidebar-nav" id="mobile-nav-items">
+      <!-- Links injected via JS cleanly -->
+    </nav>
+  </div>
+</div>
+
+<div class="app-layout">
+  <!-- Desktop Sticky Sidebar -->
+  <aside class="sidebar">
+    <div class="sidebar-header">
+      <div class="brand-wrap">
+        <div class="brand-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" width="18" height="18">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+            <rect x="9" y="9" width="6" height="6"/>
+            <line x1="9" y1="1" x2="9" y2="4"/>
+            <line x1="15" y1="1" x2="15" y2="4"/>
+            <line x1="9" y1="20" x2="9" y2="23"/>
+            <line x1="15" y1="20" x2="15" y2="23"/>
+            <line x1="20" y1="9" x2="23" y2="9"/>
+            <line x1="20" y1="14" x2="23" y2="14"/>
+            <line x1="1" y1="9" x2="4" y2="9"/>
+            <line x1="1" y1="14" x2="4" y2="14"/>
+          </svg>
+        </div>
+        <div>
+          <div class="brand-title">OTP Service API</div>
+          <div class="brand-subtitle">v1.0 Developer Reference</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="search-box">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"/>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+      </svg>
+      <input type="text" id="endpoint-search" placeholder="Cari endpoint..." autocomplete="off">
+    </div>
+
+    <nav class="sidebar-nav" id="desktop-nav-items">
+      <div class="nav-group">
+        <div class="nav-label">Panduan</div>
+        <a href="#overview" class="nav-item active">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
+          </svg>
+          Overview
+        </a>
+        <a href="#base-url-section" class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="2" y1="12" x2="22" y2="12"/>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+          </svg>
+          Base URL & Domain
+        </a>
+        <a href="#authentication" class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          Autentikasi
+        </a>
+        <a href="#rate-limits" class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          Rate Limiting
+        </a>
+        <a href="#error-codes" class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          Error Handling
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-label">Endpoints REST</div>
+        <a href="#ep-services" class="nav-item" data-search="services daftar layanan otp">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+          Daftar Layanan
+          <span class="nav-method get">GET</span>
+        </a>
+        <a href="#ep-balance" class="nav-item" data-search="balance cek saldo coin">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="4" width="20" height="16" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>
+          </svg>
+          Cek Saldo
+          <span class="nav-method get">GET</span>
+        </a>
+        <a href="#ep-order" class="nav-item" data-search="order beli nomor otp baru">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+            <polyline points="14 2 14 8 20 8"/><line x1="12" y1="18" x2="12" y2="12"/><line x1="9" y1="15" x2="15" y2="15"/>
+          </svg>
+          Order OTP
+          <span class="nav-method post">POST</span>
+        </a>
+        <a href="#ep-status" class="nav-item" data-search="status cek status polling ambil otp">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>
+          </svg>
+          Cek Status & OTP
+          <span class="nav-method get">GET</span>
+        </a>
+        <a href="#ep-cancel" class="nav-item" data-search="cancel batalkan order refund coin">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/>
+          </svg>
+          Batal Order
+          <span class="nav-method post">POST</span>
+        </a>
+        <a href="#ep-retry" class="nav-item" data-search="retry minta ulang otp wa whatsapp">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/>
+          </svg>
+          Minta Ulang (WA)
+          <span class="nav-method post">POST</span>
+        </a>
+        <a href="#ep-history" class="nav-item" data-search="history riwayat transaksi order">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          Riwayat Order
+          <span class="nav-method get">GET</span>
+        </a>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-label">SDK & Contoh</div>
+        <a href="#quickstart" class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+          </svg>
+          Quick Start (Code)
+        </a>
+        <a href="#custom-domain-guide" class="nav-item">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+            <line x1="6" y1="6" x2="6.01" y2="6"/>
+            <line x1="6" y1="18" x2="6.01" y2="18"/>
+          </svg>
+          Setup Custom Domain
+        </a>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- Main Content Body -->
+  <main class="main-wrap">
+    <div class="content-body">
+
+      <!-- Status Bar -->
+      <div class="system-status-bar">
+        <div class="status-badge">
+          <span class="status-dot"></span>
+          <span>Semua Layanan REST API Normal & Berjalan</span>
+        </div>
+        <div class="quick-links">
+          <a href="#base-url-section" class="quick-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+            </svg>
+            <span>Base URL</span>
+          </a>
+          <a href="#authentication" class="quick-link">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+              <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+            </svg>
+            <span>API Key</span>
+          </a>
+        </div>
+      </div>
+
+      <!-- Overview Header -->
+      <section class="section" id="overview">
+        <h1 class="page-title">Dokumentasi Developer API OTP</h1>
+        <p class="lead-text">
+          Akses nomor virtual OTP secara terprogram untuk aktivasi akun WhatsApp dan berbagai provider SMS.
+          Dibangun dengan arsitektur RESTful murni, autentikasi Bearer Token, dan format respon JSON yang konsisten.
+        </p>
+
+        <!-- Metrics Grid -->
+        <div class="metrics-grid">
+          <div class="metric-card">
+            <div class="metric-val">7</div>
+            <div class="metric-lbl">Endpoint REST</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val">4</div>
+            <div class="metric-lbl">Provider Gateway</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val">60/m</div>
+            <div class="metric-lbl">Rate Limit Per Key</div>
+          </div>
+          <div class="metric-card">
+            <div class="metric-val">100%</div>
+            <div class="metric-lbl">Refund Otomatis</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Base URL & Custom Domain Section -->
+      <section class="section" id="base-url-section">
+        <h2 class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="2" y1="12" x2="22" y2="12"/>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+          </svg>
+          Base URL & Custom Domain
+        </h2>
+        <p class="sec-desc">
+          API ini mendukung deployment Vercel, server Node.js mandiri, serta <strong>Custom Domain</strong> Anda sendiri.
+          Ubah domain di bawah ini untuk memperbarui seluruh contoh kode (cURL, Node.js, Python) secara langsung.
+        </p>
+
+        <div class="base-url-card">
+          <div class="base-url-header">
+            <span class="base-url-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M4 17l6-6-6-6"/>
+                <path d="M12 19h8"/>
+              </svg>
+              Konfigurasi Host Target
+            </span>
+            <div class="preset-pills">
+              <button class="preset-btn active" data-url="https://api.yourdomain.com">Custom Domain</button>
+              <button class="preset-btn" id="preset-origin">Current Host</button>
+              <button class="preset-btn" data-url="http://localhost:3000">Localhost (3000)</button>
+            </div>
+          </div>
+
+          <div class="base-url-input-wrap">
+            <span class="base-url-prefix">BASE</span>
+            <input type="text" id="custom-domain-input" class="base-url-input" value="https://api.yourdomain.com/api/v1">
+            <button class="base-url-copy" id="btn-copy-base" title="Copy Base URL">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              <span>Salin</span>
+            </button>
+          </div>
+
+          <div class="base-url-hint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            <span>Semua contoh cURL dan script di halaman ini langsung mengikuti domain yang Anda tentukan di atas.</span>
+          </div>
+        </div>
+      </section>
+
+      <!-- Authentication Section -->
+      <section class="section" id="authentication">
+        <h2 class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+            <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+          </svg>
+          Autentikasi Bearer Token
+        </h2>
+        <p class="sec-desc">
+          Setiap request ke endpoint API harus menyertakan API Key aktif di dalam header <code class="inline">Authorization</code>.
+        </p>
+
+        <h3 class="sub-title">Cara Mendapatkan API Key</h3>
+        <ol class="steps-list">
+          <li>Buka bot Telegram Anda</li>
+          <li>Ketik perintah <code class="inline">/apikey</code></li>
+          <li>Klik menu <strong>Generate API Key</strong></li>
+          <li>Salin dan simpan key berformat <code class="inline">ck_live_...</code> di tempat yang aman</li>
+        </ol>
+
+        <h3 class="sub-title">Header Format</h3>
+        <div class="code-panel">
+          <div class="code-panel-header">
+            <span class="code-lang-tag">HTTP Header</span>
+            <button class="copy-action-btn" onclick="copySnippet(this)">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+              </svg>
+              <span>Salin</span>
+            </button>
+          </div>
+          <pre class="code-content">Authorization: Bearer ck_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx</pre>
+        </div>
+
+        <div class="callout callout-warning">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div>
+            <strong>Perhatian Keamanan:</strong> Jangan membagikan API Key Anda ke repositori publik. Saldo koin yang digunakan oleh API adalah saldo akun bot Telegram Anda.
+          </div>
+        </div>
+      </section>
+
+      <!-- Rate Limiting -->
+      <section class="section" id="rate-limits">
+        <h2 class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <polyline points="12 6 12 12 16 14"/>
+          </svg>
+          Rate Limiting
+        </h2>
+        <p class="sec-desc">
+          Setiap API key dibatasi maksimal <strong>60 request per menit</strong> (sliding 60-second window). Status limit dikirimkan melalui response header:
+        </p>
+
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Header</th>
+                <th>Tipe</th>
+                <th>Keterangan</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code class="inline">X-RateLimit-Limit</code></td>
+                <td>Integer</td>
+                <td>Batas kuota maksimal per window (60)</td>
+              </tr>
+              <tr>
+                <td><code class="inline">X-RateLimit-Remaining</code></td>
+                <td>Integer</td>
+                <td>Sisa kuota request yang masih dapat digunakan</td>
+              </tr>
+              <tr>
+                <td><code class="inline">X-RateLimit-Reset</code></td>
+                <td>Timestamp</td>
+                <td>Waktu reset kuota dalam format detik Unix</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Error Standards -->
+      <section class="section" id="error-codes">
+        <h2 class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/>
+            <line x1="12" y1="8" x2="12" y2="12"/>
+            <line x1="12" y1="16" x2="12.01" y2="16"/>
+          </svg>
+          Format & Kode Error
+        </h2>
+        <p class="sec-desc">
+          Semua respon error memiliki struktur JSON terpadu dengan HTTP status code yang representatif.
+        </p>
+
+        <div class="code-panel">
+          <div class="code-panel-header">
+            <span class="code-lang-tag">JSON Schema Error</span>
+          </div>
+          <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">false</span>,
+  <span class="jk">"error"</span>: {
+    <span class="jk">"code"</span>: <span class="js">"INSUFFICIENT_BALANCE"</span>,
+    <span class="jk">"message"</span>: <span class="js">"Saldo coin kamu tidak cukup. Silakan top up via bot."</span>
+  }
+}</pre>
+        </div>
+
+        <div class="table-responsive">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>HTTP</th>
+                <th>Error Code</th>
+                <th>Penyebab & Solusi</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr>
+                <td><code class="inline">401</code></td>
+                <td><code class="inline">UNAUTHORIZED</code></td>
+                <td>Header Bearer token tidak ada atau tidak valid</td>
+              </tr>
+              <tr>
+                <td><code class="inline">402</code></td>
+                <td><code class="inline">INSUFFICIENT_BALANCE</code></td>
+                <td>Saldo koin akun tidak mencukupi untuk order nomor ini</td>
+              </tr>
+              <tr>
+                <td><code class="inline">404</code></td>
+                <td><code class="inline">ORDER_NOT_FOUND</code></td>
+                <td>Order ID tidak ditemukan atau milik user lain</td>
+              </tr>
+              <tr>
+                <td><code class="inline">404</code></td>
+                <td><code class="inline">SERVICE_NOT_FOUND</code></td>
+                <td>ID Layanan atau provider tidak tersedia</td>
+              </tr>
+              <tr>
+                <td><code class="inline">409</code></td>
+                <td><code class="inline">ALREADY_PAID</code></td>
+                <td>OTP telah sukses diterima, order tidak dapat dibatalkan</td>
+              </tr>
+              <tr>
+                <td><code class="inline">429</code></td>
+                <td><code class="inline">RATE_LIMITED</code></td>
+                <td>Melebihi batas 60 req/menit. Tunggu sebelum request kembali</td>
+              </tr>
+              <tr>
+                <td><code class="inline">502</code></td>
+                <td><code class="inline">ORDER_FAILED</code></td>
+                <td>Gateway provider sedang kehabisan stok atau error teknis</td>
+              </tr>
+              <tr>
+                <td><code class="inline">503</code></td>
+                <td><code class="inline">PROVIDER_DISABLED</code></td>
+                <td>Provider tersebut sedang dinonaktifkan sementara</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- ════════════ Endpoints List ════════════ -->
+      <section class="section" id="endpoints-list">
+        <h2 class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>
+          </svg>
+          Daftar Endpoint REST
+        </h2>
+        <p class="sec-desc">
+          Klik pada setiap endpoint untuk melihat rincian parameter request, format header, dan struktur balasan payload.
+        </p>
+
+        <!-- 1. GET /services -->
+        <div class="endpoint-card expanded" id="ep-services">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method get">GET</span>
+            <span class="endpoint-route">/services</span>
+            <span class="endpoint-summary">Katalog layanan, harga koin, & stok</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Mengambil seluruh daftar layanan nomor virtual yang tersedia beserta provider, harga koin, dan ketersediaan stok.</p>
+            
+            <h4 class="sub-title">Query Parameters</h4>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead><tr><th>Parameter</th><th>Tipe</th><th>Status</th><th>Deskripsi</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><code class="inline">provider</code></td>
+                    <td>string</td>
+                    <td><span class="tag-opt">Opsional</span></td>
+                    <td>Filter provider: <code class="inline">wahub</code>, <code class="inline">engineunicorn</code>, <code class="inline">herosms</code>, <code class="inline">rumahotp</code></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h4 class="sub-title">Contoh Respon (200 OK)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">200 OK JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: {
+    <span class="jk">"whatsapp"</span>: [
+      {
+        <span class="jk">"service_id"</span>: <span class="js">"12"</span>,
+        <span class="jk">"name"</span>: <span class="js">"WhatsApp"</span>,
+        <span class="jk">"price"</span>: <span class="jn">2500</span>,
+        <span class="jk">"stock"</span>: <span class="jn">180</span>,
+        <span class="jk">"provider"</span>: <span class="js">"wahub"</span>,
+        <span class="jk">"type"</span>: <span class="js">"whatsapp"</span>
+      }
+    ],
+    <span class="jk">"sms"</span>: [
+      {
+        <span class="jk">"service_id"</span>: <span class="js">"wa"</span>,
+        <span class="jk">"name"</span>: <span class="js">"WhatsApp (SMS)"</span>,
+        <span class="jk">"price"</span>: <span class="jn">3500</span>,
+        <span class="jk">"stock"</span>: <span class="jn">500</span>,
+        <span class="jk">"provider"</span>: <span class="js">"herosms"</span>,
+        <span class="jk">"type"</span>: <span class="js">"sms"</span>
+      }
+    ]
+  },
+  <span class="jk">"total"</span>: <span class="jn">32</span>
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. GET /balance -->
+        <div class="endpoint-card" id="ep-balance">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method get">GET</span>
+            <span class="endpoint-route">/balance</span>
+            <span class="endpoint-summary">Cek saldo koin akun</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Mengembalikan informasi saldo koin pengguna yang terasosiasi dengan API Key.</p>
+            <h4 class="sub-title">Contoh Respon (200 OK)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">200 OK JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: {
+    <span class="jk">"balance"</span>: <span class="jn">50000</span>,
+    <span class="jk">"balance_formatted"</span>: <span class="js">"Rp50.000"</span>,
+    <span class="jk">"is_reseller"</span>: <span class="jb">false</span>,
+    <span class="jk">"total_trx"</span>: <span class="jn">42</span>
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. POST /order -->
+        <div class="endpoint-card" id="ep-order">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method post">POST</span>
+            <span class="endpoint-route">/order</span>
+            <span class="endpoint-summary">Order & pesan nomor baru</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Membuat pesanan nomor virtual baru. Saldo koin akan langsung dipotong sesuai tarif layanan.</p>
+            
+            <h4 class="sub-title">Request Body (application/json)</h4>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead><tr><th>Field</th><th>Tipe</th><th>Status</th><th>Deskripsi</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><code class="inline">service_id</code></td>
+                    <td>string</td>
+                    <td><span class="tag-req">Wajib</span></td>
+                    <td>ID layanan dari daftar <code class="inline">/services</code></td>
+                  </tr>
+                  <tr>
+                    <td><code class="inline">provider</code></td>
+                    <td>string</td>
+                    <td><span class="tag-req">Wajib</span></td>
+                    <td><code class="inline">wahub</code> | <code class="inline">engineunicorn</code> | <code class="inline">herosms</code> | <code class="inline">rumahotp</code></td>
+                  </tr>
+                  <tr>
+                    <td><code class="inline">country_id</code></td>
+                    <td>string</td>
+                    <td><span class="tag-opt">SMS Saja</span></td>
+                    <td>ID negara (wajib jika memesan layanan SMS)</td>
+                  </tr>
+                  <tr>
+                    <td><code class="inline">operator_id</code></td>
+                    <td>string</td>
+                    <td><span class="tag-opt">Opsional</span></td>
+                    <td>ID operator tertentu</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h4 class="sub-title">Contoh Request Body</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">Payload JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"service_id"</span>: <span class="js">"12"</span>,
+  <span class="jk">"provider"</span>: <span class="js">"wahub"</span>
+}</pre>
+            </div>
+
+            <h4 class="sub-title">Contoh Respon (201 Created)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">201 Created JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: {
+    <span class="jk">"order_id"</span>: <span class="js">"TRX_9281726481"</span>,
+    <span class="jk">"phone"</span>: <span class="js">"+6281234567890"</span>,
+    <span class="jk">"service"</span>: <span class="js">"WhatsApp"</span>,
+    <span class="jk">"provider"</span>: <span class="js">"wahub"</span>,
+    <span class="jk">"price"</span>: <span class="jn">2500</span>,
+    <span class="jk">"balance_after"</span>: <span class="jn">47500</span>,
+    <span class="jk">"expires_at"</span>: <span class="js">"2026-09-22T02:24:00.000Z"</span>,
+    <span class="jk">"status"</span>: <span class="js">"waiting"</span>
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. GET /order/:id -->
+        <div class="endpoint-card" id="ep-status">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method get">GET</span>
+            <span class="endpoint-route">/order/:id</span>
+            <span class="endpoint-summary">Cek status & ambil kode OTP</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Lakukan polling ke endpoint ini setiap 3-5 detik sampai status berubah menjadi <code class="inline">completed</code> atau pesanan kedaluwarsa.</p>
+
+            <div class="callout callout-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>
+              </svg>
+              <div>
+                <strong>Tips Polling:</strong> Nilai <code class="inline">:id</code> adalah <code class="inline">order_id</code> yang didapat dari pemanggilan <code class="inline">POST /order</code>.
+              </div>
+            </div>
+
+            <h4 class="sub-title">Contoh Respon — OTP Diterima (200 OK)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">200 OK (Completed)</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: {
+    <span class="jk">"order_id"</span>: <span class="js">"TRX_9281726481"</span>,
+    <span class="jk">"phone"</span>: <span class="js">"+6281234567890"</span>,
+    <span class="jk">"status"</span>: <span class="js">"completed"</span>,
+    <span class="jk">"otp"</span>: <span class="js">"892104"</span>,
+    <span class="jk">"sms_message"</span>: <span class="js">"Kode verifikasi WhatsApp Anda: 892-104"</span>,
+    <span class="jk">"service"</span>: <span class="js">"WhatsApp"</span>,
+    <span class="jk">"price"</span>: <span class="jn">2500</span>
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5. POST /order/:id/cancel -->
+        <div class="endpoint-card" id="ep-cancel">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method post">POST</span>
+            <span class="endpoint-route">/order/:id/cancel</span>
+            <span class="endpoint-summary">Batalkan order & refund koin</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Membatalkan pesanan yang belum menerima kode OTP (status <code class="inline">waiting</code>). Seluruh koin dikembalikan 100% ke saldo akun.</p>
+
+            <div class="callout callout-warning">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
+              <div>
+                <strong>Proteksi Anti-Exploit:</strong> Pesanan yang sudah menerima kode OTP tidak dapat dibatalkan dan akan mengembalikan error <code class="inline">409 ALREADY_PAID</code>.
+              </div>
+            </div>
+
+            <h4 class="sub-title">Contoh Respon (200 OK)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">200 OK JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: {
+    <span class="jk">"order_id"</span>: <span class="js">"TRX_9281726481"</span>,
+    <span class="jk">"status"</span>: <span class="js">"cancelled"</span>,
+    <span class="jk">"refunded"</span>: <span class="jb">true</span>,
+    <span class="jk">"refund_amount"</span>: <span class="jn">2500</span>,
+    <span class="jk">"balance_after"</span>: <span class="jn">50000</span>
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- 6. POST /order/:id/retry -->
+        <div class="endpoint-card" id="ep-retry">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method post">POST</span>
+            <span class="endpoint-route">/order/:id/retry</span>
+            <span class="endpoint-summary">Minta ulang kirim OTP (WA)</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Meminta pengiriman ulang kode OTP untuk provider WhatsApp (maksimal 3 kali percobaan per order).</p>
+
+            <h4 class="sub-title">Contoh Respon (200 OK)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">200 OK JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: {
+    <span class="jk">"order_id"</span>: <span class="js">"TRX_9281726481"</span>,
+    <span class="jk">"phone"</span>: <span class="js">"+6281234567890"</span>,
+    <span class="jk">"retry_count"</span>: <span class="jn">1</span>,
+    <span class="jk">"max_retries"</span>: <span class="jn">3</span>,
+    <span class="jk">"status"</span>: <span class="js">"waiting"</span>
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- 7. GET /history -->
+        <div class="endpoint-card" id="ep-history">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method get">GET</span>
+            <span class="endpoint-route">/history</span>
+            <span class="endpoint-summary">Riwayat transaksi order</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Mengambil daftar riwayat transaksi pemesanan nomor OTP dari akun Anda.</p>
+
+            <h4 class="sub-title">Query Parameters</h4>
+            <div class="table-responsive">
+              <table class="data-table">
+                <thead><tr><th>Parameter</th><th>Tipe</th><th>Default</th><th>Deskripsi</th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td><code class="inline">limit</code></td>
+                    <td>integer</td>
+                    <td><code class="inline">20</code></td>
+                    <td>Jumlah data yang dikembalikan (maksimal 100)</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+
+            <h4 class="sub-title">Contoh Respon (200 OK)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">200 OK JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: [
+    {
+      <span class="jk">"order_id"</span>: <span class="js">"TRX_9281726481"</span>,
+      <span class="jk">"phone"</span>: <span class="js">"+6281234567890"</span>,
+      <span class="jk">"service"</span>: <span class="js">"WhatsApp"</span>,
+      <span class="jk">"price"</span>: <span class="jn">2500</span>,
+      <span class="jk">"provider"</span>: <span class="js">"wahub"</span>,
+      <span class="jk">"refunded"</span>: <span class="jb">false</span>,
+      <span class="jk">"date"</span>: <span class="js">"2026-09-22T01:45:12.000Z"</span>
+    }
+  ],
+  <span class="jk">"total"</span>: <span class="jn">1</span>
+}</pre>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ════════════ Quick Start Integration ════════════ -->
+      <section class="section" id="quickstart">
+        <h2 class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/>
+          </svg>
+          Contoh Integrasi Lengkap
+        </h2>
+        <p class="sec-desc">
+          Alur standar integrasi: <strong>1. Beli Nomor</strong> &rarr; <strong>2. Polling OTP</strong> &rarr; <strong>3. Auto Cancel jika Timeout</strong>.
+        </p>
+
+        <!-- Tabs -->
+        <div class="tab-bar">
+          <button class="tab-item active" onclick="switchCodeTab(this, 'tab-curl')">cURL</button>
+          <button class="tab-item" onclick="switchCodeTab(this, 'tab-node')">Node.js (Axios)</button>
+          <button class="tab-item" onclick="switchCodeTab(this, 'tab-python')">Python (Requests)</button>
+        </div>
+
+        <!-- Tab 1: cURL -->
+        <div class="tab-pane active" id="tab-curl">
+          <div class="code-panel">
+            <div class="code-panel-header">
+              <span class="code-lang-tag">Shell / Bash</span>
+              <button class="copy-action-btn" onclick="copySnippet(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span>Salin</span>
+              </button>
+            </div>
+            <pre class="code-content"><span class="jc"># 1. Pesan nomor OTP baru</span>
+curl -X POST __BASE_URL__/order \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"service_id": "12", "provider": "wahub"}'
+
+<span class="jc"># 2. Periksa status dan ambil kode OTP</span>
+curl -X GET __BASE_URL__/order/TRX_9281726481 \
+  -H "Authorization: Bearer YOUR_API_KEY"
+
+<span class="jc"># 3. Batalkan pesanan jika tidak menerima kode</span>
+curl -X POST __BASE_URL__/order/TRX_9281726481/cancel \
+  -H "Authorization: Bearer YOUR_API_KEY"</pre>
+          </div>
+        </div>
+
+        <!-- Tab 2: Node.js -->
+        <div class="tab-pane" id="tab-node">
+          <div class="code-panel">
+            <div class="code-panel-header">
+              <span class="code-lang-tag">JavaScript / ES Modules</span>
+              <button class="copy-action-btn" onclick="copySnippet(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span>Salin</span>
+              </button>
+            </div>
+            <pre class="code-content">const axios = require("axios");
+
+const API_KEY = "YOUR_API_KEY";
+const BASE_URL = "__BASE_URL__";
+const headers = { 
+  Authorization: `Bearer ${API_KEY}`,
+  "Content-Type": "application/json"
+};
+
+async function getOtpFlow() {
+  try {
+    <span class="jc">// 1. Pesan nomor</span>
+    const orderRes = await axios.post(
+      `${BASE_URL}/order`,
+      { service_id: "12", provider: "wahub" },
+      { headers }
+    );
+    const order = orderRes.data.data;
+    console.log("Nomor diperoleh:", order.phone);
+    console.log("Order ID:", order.order_id);
+
+    <span class="jc">// 2. Polling kode OTP selama maksimal 2 menit (setiap 5 detik)</span>
+    for (let attempt = 0; attempt < 24; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 5000));
+      
+      const pollRes = await axios.get(`${BASE_URL}/order/${order.order_id}`, { headers });
+      const statusData = pollRes.data.data;
+
+      if (statusData.status === "completed") {
+        console.log("Kode OTP Masuk:", statusData.otp);
+        return statusData.otp;
+      }
+    }
+
+    <span class="jc">// 3. Batalkan jika tidak ada kode yang masuk (otomatis refund)</span>
+    console.log("Timeout, membatalkan pesanan...");
+    await axios.post(`${BASE_URL}/order/${order.order_id}/cancel`, {}, { headers });
+    console.log("Order dibatalkan, saldo koin telah direfund.");
+  } catch (error) {
+    console.error("API Error:", error.response?.data || error.message);
+  }
+}
+
+getOtpFlow();</pre>
+          </div>
+        </div>
+
+        <!-- Tab 3: Python -->
+        <div class="tab-pane" id="tab-python">
+          <div class="code-panel">
+            <div class="code-panel-header">
+              <span class="code-lang-tag">Python 3</span>
+              <button class="copy-action-btn" onclick="copySnippet(this)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                <span>Salin</span>
+              </button>
+            </div>
+            <pre class="code-content">import time
+import requests
+
+API_KEY = "YOUR_API_KEY"
+BASE_URL = "__BASE_URL__"
+headers = {
+    "Authorization": f"Bearer {API_KEY}",
+    "Content-Type": "application/json"
+}
+
+def main():
+    <span class="jc"># 1. Pesan nomor</span>
+    res = requests.post(
+        f"{BASE_URL}/order",
+        json={"service_id": "12", "provider": "wahub"},
+        headers=headers
+    ).json()
+
+    order = res.get("data")
+    order_id = order["order_id"]
+    print(f"Nomor: {order['phone']} | Order ID: {order_id}")
+
+    <span class="jc"># 2. Polling kode OTP setiap 5 detik (max 2 menit)</span>
+    for _ in range(24):
+        time.sleep(5)
+        st = requests.get(f"{BASE_URL}/order/{order_id}", headers=headers).json()
+        data = st.get("data", {})
+        
+        if data.get("status") == "completed":
+            print(f"Kode OTP Masuk: {data.get('otp')}")
+            return data.get("otp")
+
+    <span class="jc"># 3. Timeout, batalkan pesanan</span>
+    print("Timeout, membatalkan pesanan...")
+    requests.post(f"{BASE_URL}/order/{order_id}/cancel", headers=headers)
+    print("Pesanan dibatalkan & saldo koin direfund.")
+
+if __name__ == "__main__":
+    main()</pre>
+          </div>
+        </div>
+      </section>
+
+      <!-- Custom Domain Guide -->
+      <section class="section" id="custom-domain-guide">
+        <h2 class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="2" width="20" height="8" rx="2" ry="2"/>
+            <rect x="2" y="14" width="20" height="8" rx="2" ry="2"/>
+            <line x1="6" y1="6" x2="6.01" y2="6"/>
+            <line x1="6" y1="18" x2="6.01" y2="18"/>
+          </svg>
+          Panduan Setup Custom Domain
+        </h2>
+        <p class="sec-desc">
+          Bila Anda ingin menghubungkan domain sendiri (misal <code class="inline">api.domainanda.com</code>) ke backend Vercel atau VPS:
+        </p>
+
+        <h3 class="sub-title">1. Setup di Vercel (Rekomendasi)</h3>
+        <ol class="steps-list">
+          <li>Buka <strong>Project Settings &rarr; Domains</strong> di dashboard Vercel Anda.</li>
+          <li>Masukkan domain atau subdomain Anda, contoh: <code class="inline">api.domainanda.com</code>.</li>
+          <li>Buka panel DNS domain Anda (Cloudflare, Niagahoster, Rumahweb, dll), lalu tambahkan DNS Record:
+            <br>Tipe: <code class="inline">CNAME</code> &middot; Name: <code class="inline">api</code> &middot; Value: <code class="inline">cname.vercel-dns.com</code>
+          </li>
+          <li>Vercel akan otomatis menerbitkan sertifikat SSL HTTPS gratis.</li>
+        </ol>
+
+        <h3 class="sub-title">2. Update Environment Variable Bot</h3>
+        <p class="sec-desc">
+          Agar bot Telegram membagikan tautan docs dan endpoint custom domain ke pengguna, atur variabel di <code class="inline">.env</code> atau Vercel Environment Variables:
+        </p>
+        <div class="code-panel">
+          <div class="code-panel-header"><span class="code-lang-tag">Environment Config</span></div>
+          <pre class="code-content">API_DOCS_URL=https://api.domainanda.com</pre>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <footer class="docs-footer">
+        <div>
+          <span>OTP Service Developer API &middot; REST Specification</span>
+        </div>
+        <div>
+          <span>Keamanan Terjamin &middot; Enkripsi TLS 1.3</span>
+        </div>
+      </footer>
+
+    </div>
+  </main>
+</div>
+
+<!-- Core Script -->
+<script>
+  // ── State & Base URL Management ──
+  let activeBaseUrl = "https://api.yourdomain.com/api/v1";
+
+  // Auto detect host if not file://
+  if (window.location.protocol.startsWith("http")) {
+    const currentOrigin = window.location.origin;
+    const presetBtn = document.getElementById("preset-origin");
+    if (presetBtn) {
+      presetBtn.dataset.url = currentOrigin;
+      presetBtn.textContent = window.location.host;
+    }
+  }
+
+  const domainInput = document.getElementById("custom-domain-input");
+  const copyBaseBtn = document.getElementById("btn-copy-base");
+
+  function updateCodeSnippets(newBase) {
+    activeBaseUrl = newBase.replace(/\/+$/, ""); // trim trailing slashes
+    if (!activeBaseUrl.endsWith("/api/v1")) {
+      // Ensure /api/v1 suffix is cleanly formatted
+      if (!activeBaseUrl.includes("/api/v1")) {
+        activeBaseUrl += "/api/v1";
+      }
+    }
+    domainInput.value = activeBaseUrl;
+
+    // Update all occurrences of __BASE_URL__ in code blocks
+    document.querySelectorAll("pre.code-content").forEach(pre => {
+      if (!pre.dataset.rawTemplate) {
+        pre.dataset.rawTemplate = pre.innerHTML;
+      }
+      pre.innerHTML = pre.dataset.rawTemplate.replace(/__BASE_URL__/g, activeBaseUrl);
+    });
+  }
+
+  // Initial code update
+  if (domainInput) {
+    domainInput.addEventListener("input", (e) => {
+      updateCodeSnippets(e.target.value.trim());
+    });
+    updateCodeSnippets(domainInput.value);
+  }
+
+  // Preset Buttons
+  document.querySelectorAll(".preset-btn").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      const url = btn.dataset.url;
+      if (url) {
+        const fullUrl = url.endsWith("/api/v1") ? url : `${url}/api/v1`;
+        updateCodeSnippets(fullUrl);
+      }
+    });
+  });
+
+  // Copy Base URL Button
+  if (copyBaseBtn) {
+    copyBaseBtn.addEventListener("click", () => {
+      navigator.clipboard.writeText(activeBaseUrl).then(() => {
+        const span = copyBaseBtn.querySelector("span");
+        const originalText = span.textContent;
+        span.textContent = "Tersalin!";
+        setTimeout(() => {
+          span.textContent = originalText;
+        }, 1500);
+      });
+    });
+  }
+
+  // ── Accordion toggle ──
+  function toggleEndpoint(el) {
+    const card = el.closest(".endpoint-card");
+    card.classList.toggle("expanded");
+  }
+
+  // ── Copy Snippet Function ──
+  function copySnippet(btn) {
+    const panel = btn.closest(".code-panel");
+    const pre = panel.querySelector("pre.code-content");
+    const text = pre.innerText || pre.textContent;
+
+    navigator.clipboard.writeText(text).then(() => {
+      const span = btn.querySelector("span");
+      const original = span ? span.textContent : "";
+      btn.classList.add("copied");
+      if (span) span.textContent = "Tersalin!";
+      setTimeout(() => {
+        btn.classList.remove("copied");
+        if (span) span.textContent = original;
+      }, 1500);
+    });
+  }
+
+  // ── Tab Switcher ──
+  function switchCodeTab(btn, paneId) {
+    const section = btn.closest(".section");
+    section.querySelectorAll(".tab-item").forEach(b => b.classList.remove("active"));
+    section.querySelectorAll(".tab-pane").forEach(p => p.classList.remove("active"));
+    btn.classList.add("active");
+    const target = document.getElementById(paneId);
+    if (target) target.classList.add("active");
+  }
+
+  // ── Mobile Drawer ──
+  const drawer = document.getElementById("mobile-drawer");
+  const menuToggle = document.getElementById("mobile-menu-toggle");
+  const drawerClose = document.getElementById("mobile-drawer-close");
+  const desktopNav = document.getElementById("desktop-nav-items");
+  const mobileNav = document.getElementById("mobile-nav-items");
+
+  // Populate mobile drawer with clean navigation links (cloning items without duplicate ID issues)
+  if (desktopNav && mobileNav) {
+    mobileNav.innerHTML = desktopNav.innerHTML;
+    mobileNav.querySelectorAll(".nav-item").forEach(link => {
+      link.addEventListener("click", () => {
+        drawer.classList.remove("open");
+      });
+    });
+  }
+
+  if (menuToggle && drawer) {
+    menuToggle.addEventListener("click", () => {
+      drawer.classList.add("open");
+    });
+  }
+
+  if (drawerClose && drawer) {
+    drawerClose.addEventListener("click", () => {
+      drawer.classList.remove("open");
+    });
+  }
+
+  if (drawer) {
+    drawer.addEventListener("click", (e) => {
+      if (e.target === drawer) drawer.classList.remove("open");
+    });
+  }
+
+  // ── Active Navigation Scrollspy ──
+  const navLinks = document.querySelectorAll(".sidebar .nav-item");
+  const observedSections = document.querySelectorAll("section[id], .endpoint-card[id]");
+
+  const observer = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (entry.isIntersecting) {
+        const id = entry.target.id;
+        navLinks.forEach(link => {
+          if (link.getAttribute("href") === `#${id}`) {
+            link.classList.add("active");
+          } else {
+            link.classList.remove("active");
+          }
+        });
+      }
+    });
+  }, { rootMargin: "-15% 0px -70% 0px" });
+
+  observedSections.forEach(sec => observer.observe(sec));
+
+  // ── Filter / Search Endpoints ──
+  const searchInput = document.getElementById("endpoint-search");
+  if (searchInput) {
+    searchInput.addEventListener("input", (e) => {
+      const q = e.target.value.toLowerCase().trim();
+      document.querySelectorAll(".sidebar .nav-item[data-search]").forEach(item => {
+        const term = item.getAttribute("data-search") || "";
+        const text = item.textContent.toLowerCase();
+        if (!q || term.includes(q) || text.includes(q)) {
+          item.style.display = "flex";
+        } else {
+          item.style.display = "none";
+        }
+      });
+    });
+  }
+</script>
+</body>
+</html>
