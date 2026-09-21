@@ -306,6 +306,47 @@ async function sendChannelRealtimeOtpNotification({ serviceName, phone, otp, trx
   }
 }
 
+// ── Notifikasi Laporan Order ke Channel Khusus ──────────────
+function getOrderReportChannel() {
+  return config.CHANNEL_NOTIF_ORDER || null;
+}
+
+async function sendChannelOrderReportNotification({
+  type = "WHATSAPP",
+  username = "",
+  userId = "",
+  serviceName = "",
+  phone = "",
+  harga = 0,
+  modal = 0,
+  otp = "",
+  serverName = "",
+}) {
+  const targetChannel = getOrderReportChannel();
+  if (!targetChannel) return;
+
+  const userDisplay = username ? username.replace(/^@/, "") : (userId ? String(userId) : "User");
+  const modalText = (modal !== undefined && modal !== null && Number(modal) > 0)
+    ? ` (Modal: Rp ${Number(modal).toLocaleString("id-ID")})`
+    : "";
+
+  const text = `<blockquote>💬 <b>LAPORAN ORDER OTP (${String(type).toUpperCase()})</b>
+
+👤 User: <b>${escapeHTML(userDisplay)}</b>
+🆔 ID: <code>${escapeHTML(String(userId || "-"))}</code>
+💬 Layanan: <b>${escapeHTML(serviceName || "-")}</b>
+📞 Nomor: <code>${escapeHTML(String(phone || "-"))}</code>
+💰 Harga: <b>Rp ${Number(harga || 0).toLocaleString("id-ID")}</b>${modalText}
+🔐 Kode: <code>${escapeHTML(String(otp || "-"))}</code>
+🖥️ Server: <b>${escapeHTML(serverName || "-")}</b></blockquote>`;
+
+  try {
+    await bot.telegram.sendMessage(targetChannel, text, { parse_mode: "HTML" });
+  } catch (err) {
+    console.error("[NOTIF CH ORDER ERROR]", err.message);
+  }
+}
+
 async function sendChannelPesananSelesaiNotification() {
   // Dinonaktifkan sesuai permintaan: channel notif hanya untuk notifikasi OTP realtime saja
   return;
@@ -2187,6 +2228,10 @@ ${escapeHTML(wahub.getLastError() || "Stok tidak tersedia.")}</blockquote>`,
     token: order.token, phone: order.phone, expiresAt: expiryMs,
     cancelAt: 0, retryCount: 0, trxId,
     sessionKey: trxId,
+    userId: uid,
+    username: ctx.from.username || ctx.from.first_name || "",
+    provider: "wahub",
+    providerPrice: fresh.price,
     testimoniData: {
       username: ctx.from.username || ctx.from.first_name, phone: order.phone,
       negara: fresh.name, harga: price, trxId,
@@ -2408,6 +2453,9 @@ ${escapeHTML(engineunicorn.getLastError() || "Stok tidak tersedia atau saldo pen
     token: order.token || order.order_id, phone: order.phone, expiresAt: expiryMs,
     cancelAt: 0, retryCount: 0, trxId,
     sessionKey: trxId,
+    userId: uid,
+    username: ctx.from.username || ctx.from.first_name || "",
+    providerPrice: fresh.price,
     testimoniData: {
       username: ctx.from.username || ctx.from.first_name, phone: order.phone,
       negara: fresh.name, harga: price, trxId,
@@ -4580,6 +4628,22 @@ Coin dikembalikan setelah pembatalan provider dikonfirmasi.</blockquote>`,
           trxId: sess.trxId,
         });
 
+        // Siarkan Laporan Order OTP ke Channel Khusus
+        const serverLabel = sess.provider === "engineunicorn" ? "Server 2 (WhatsApp)" : "Server 1 (WhatsApp)";
+        const userObj = db.getUser(uid);
+        const username = sess.username || sess.testimoniData?.username || userObj?.username || "";
+        sendChannelOrderReportNotification({
+          type: "WHATSAPP",
+          username: username,
+          userId: uid,
+          serviceName: sess.serviceName,
+          phone: sess.phone,
+          harga: sess.hargaUser,
+          modal: sess.providerPrice,
+          otp: otp,
+          serverName: serverLabel,
+        }).catch(() => {});
+
         await bot.telegram.sendMessage(
           uid,
           `<blockquote>🔑 <b>OTP MASUK!</b>
@@ -5069,6 +5133,26 @@ Order dibatalkan & coin dikembalikan.
             },
           }
         );
+        sendChannelRealtimeOtpNotification({
+          serviceName: sess.serviceName,
+          phone,
+          otp: otpCode,
+          trxId: sess.trxId || orderId,
+        }).catch(() => {});
+
+        const userObj = db.getUser(uid);
+        sendChannelOrderReportNotification({
+          type: "SMS",
+          username: userObj?.username || "",
+          userId: uid,
+          serviceName: sess.serviceName,
+          phone,
+          harga: sess.hargaUser,
+          modal: sess.hargaAsli || sess.providerPrice,
+          otp: otpCode,
+          serverName: "Server 1 (SMS - OTPCepat)",
+        }).catch(() => {});
+
         await otpcepat.finishOrder(orderId).catch(() => {});
         delete sessions[uid];
         checkResellerPromotion(bot, uid).catch(() => {});
@@ -5218,6 +5302,19 @@ Coin dikembalikan.
           otp: otpCode,
           trxId: sess.trxId || orderId,
         }).catch(() => {});
+
+        const userObj = db.getUser(uid);
+        sendChannelOrderReportNotification({
+          type: "SMS",
+          username: userObj?.username || "",
+          userId: uid,
+          serviceName: sess.serviceName,
+          phone,
+          harga: sess.hargaUser,
+          modal: sess.hargaAsli || sess.providerPrice,
+          otp: otpCode,
+          serverName: "Server 1 (SMS)",
+        }).catch(() => {});
         delete sessions[uid];
         checkResellerPromotion(bot, uid).catch(() => {});
         return;
@@ -5336,6 +5433,19 @@ Coin dikembalikan.
           phone,
           otp: otpCode,
           trxId: sess.trxId || orderId,
+        }).catch(() => {});
+
+        const userObj = db.getUser(uid);
+        sendChannelOrderReportNotification({
+          type: "SMS",
+          username: userObj?.username || "",
+          userId: uid,
+          serviceName: sess.serviceName,
+          phone,
+          harga: sess.hargaUser,
+          modal: sess.hargaDasar || sess.providerPrice,
+          otp: otpCode,
+          serverName: "Server 2 (SMS)",
         }).catch(() => {});
         delete sessions[uid];
         checkResellerPromotion(bot, uid).catch(() => {});
@@ -6272,6 +6382,44 @@ bot.action(/^mandatory_join_(on|off)$/, async (ctx) => {
     `<blockquote>🔐 Wajib join sekarang <b>${enabled ? "AKTIF" : "NONAKTIF"}</b>.</blockquote>`,
     { parse_mode: "HTML" }
   ).catch(() => {});
+});
+
+bot.command(["setchorder", "setchlaporan"], async (ctx) => {
+  if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
+  const args = ownerArgs(ctx);
+  if (!args.length) {
+    return ctx.replyWithHTML(`<blockquote>ℹ️ Channel laporan order saat ini: <b>${escapeHTML(config.CHANNEL_NOTIF_ORDER || "Belum diatur")}</b>\n\nCara ganti:\n<code>/setchorder @username_channel</code> atau ID channel <code>-100xxx</code></blockquote>`);
+  }
+  const target = args[0].trim();
+  config.CHANNEL_NOTIF_ORDER = target;
+  return ctx.replyWithHTML(`<blockquote>✅ Channel laporan order OTP berhasil diatur ke: <b>${escapeHTML(target)}</b>\n\nPastikan bot sudah dijadikan admin di channel tersebut! Gunakan <code>/testchorder</code> untuk uji coba kirim notifikasi.</blockquote>`);
+});
+
+bot.command(["testchorder", "testchlaporan"], async (ctx) => {
+  if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
+  const targetChannel = getOrderReportChannel();
+  if (!targetChannel) {
+    return ctx.replyWithHTML("<blockquote>❌ Channel laporan order belum diatur. Gunakan <code>/setchorder @channel_kamu</code></blockquote>");
+  }
+
+  await ctx.replyWithHTML(`<blockquote>⏳ Mengirim pesan uji coba laporan order ke <b>${escapeHTML(targetChannel)}</b>...</blockquote>`);
+
+  try {
+    await sendChannelOrderReportNotification({
+      type: "WHATSAPP",
+      username: ctx.from.username || ctx.from.first_name || "kayy",
+      userId: ctx.from.id,
+      serviceName: "Dana",
+      phone: "6283865381009",
+      harga: 1100,
+      modal: 700,
+      otp: "839102",
+      serverName: "Server 1 (WhatsApp)",
+    });
+    return ctx.replyWithHTML(`<blockquote>✅ Pesan uji coba berhasil terkirim ke <b>${escapeHTML(targetChannel)}</b>! Silakan cek channel Anda.</blockquote>`);
+  } catch (err) {
+    return ctx.replyWithHTML(`<blockquote>❌ Gagal mengirim: ${escapeHTML(err.message)}\n\nPastikan bot sudah dijadikan <b>Admin</b> di channel tersebut dengan izin Kirim Pesan.</blockquote>`);
+  }
 });
 
 bot.command("addjoin", async (ctx) => {

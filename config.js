@@ -5,6 +5,7 @@ module.exports = {
   urladmin: "https://t.me/Adm_Calabay",
   CHANNEL_USERNAME: "@tokocalabay",
   CHANNEL_NOTIF_REALTIME: "@notifcalabay", // Khusus channel notif realtime (ganti dengan @username atau ID channel kamu)
+  CHANNEL_NOTIF_ORDER: process.env.CHANNEL_NOTIF_ORDER || "@notifordercalabay", // Khusus channel laporan order OTP (ganti dengan @username atau ID channel kamu)
   BOT_LINK: "https://t.me/Calabayybot",
 
   // ── SERVER 1: WAHUB OTP ─────────────────────────────────
