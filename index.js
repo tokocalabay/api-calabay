@@ -6955,28 +6955,60 @@ ${topStr}
   );
 });
 
-// ── /apikey — Developer API Key Management ────────────────
+// ── /apikey — Developer API Key Management (1 Key Per Akun) ──────
 async function showApiKeyMenu(ctx) {
   const uid = ctx.from.id;
   db.registerUser(uid, ctx.from.username || ctx.from.first_name);
 
   const docsUrl = config.API_DOCS_URL || "https://api.calabay.my.id";
 
-  const messageText = `<blockquote>🔑 <b>DEVELOPER REST API</b>
+  // Ambil atau otomatis buatkan 1 API key aktif untuk akun ini
+  const keyData = await apiKeys.getOrCreateApiKey(uid);
+
+  if (!keyData || !keyData.success) {
+    const errText = `<blockquote>❌ <b>GAGAL MEMUAT API KEY</b>
+━━━━━━━━━━━━━━━━
+${escapeHTML(keyData?.error || "Terjadi kesalahan saat memuat API Key Anda.")}
+Silakan coba beberapa saat lagi.</blockquote>`;
+    if (ctx.callbackQuery) {
+      return ctx.editMessageText(errText, { parse_mode: "HTML" }).catch(() => ctx.replyWithHTML(errText));
+    }
+    return ctx.replyWithHTML(errText);
+  }
+
+  const lastUsedText = keyData.lastUsed
+    ? new Date(keyData.lastUsed).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" })
+    : "Belum pernah";
+
+  const messageText = `<blockquote>🔑 <b>CALABAY DEVELOPER API</b>
 ━━━━━━━━━━━━━━━━
 Gunakan API untuk order OTP secara otomatis dari program / script Anda.
-Saldo coin yang digunakan terhubung dengan akun bot Telegram Anda.
+Saldo coin yang digunakan terhubung langsung dengan bot Telegram ini.
 
-📖 Dokumentasi: <a href="${docsUrl}">${docsUrl}</a>
+🔑 <b>API Key Anda:</b>
+<code>${keyData.key}</code>
+👆 <i>Ketuk teks key di atas untuk langsung menyalin</i>
+
+📊 Status: <b>✅ Aktif</b>
+📈 Penggunaan: <b>${keyData.totalRequests || 0} request</b>
+⏰ Terakhir Dipakai: <b>${lastUsedText}</b>
 ━━━━━━━━━━━━━━━━
-Pilih menu di bawah:</blockquote>`;
+🌐 <b>Base URL:</b>
+<code>${docsUrl}/api/v1</code>
+
+📖 <b>Header Autentikasi:</b>
+<code>Authorization: Bearer ${keyData.key}</code>
+━━━━━━━━━━━━━━━━
+⚠️ <i>Key ini bersifat rahasia. Jangan bagikan kepada orang lain!</i></blockquote>`;
 
   const keyboard = {
     inline_keyboard: [
-      [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
-      [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
-      [{ text: "🗑️ Revoke Semua API Key", callback_data: `apikey_revoke_all_${uid}` }],
+      [
+        { text: "🔄 Ganti Key Baru", callback_data: `apikey_regen_${uid}` },
+        { text: "🗑️ Matikan Key", callback_data: `apikey_revoke_${uid}` },
+      ],
       [{ text: "📖 Buka API Docs", url: docsUrl }],
+      [{ text: "🔙 Menu Utama", callback_data: `apikey_back_home_${uid}` }],
     ],
   };
 
@@ -7010,153 +7042,68 @@ bot.action(/^apikey_menu_(\d+)$/, async (ctx) => {
   await showApiKeyMenu(ctx);
 });
 
-bot.action(/^apikey_gen_(\d+)$/, async (ctx) => {
+bot.action(/^apikey_regen_(\d+)$/, async (ctx) => {
   const uid = parseInt(ctx.match[1]);
   if (uid !== ctx.from.id) return ctx.answerCbQuery("❌ Bukan akun kamu.", { show_alert: true });
-  await ctx.answerCbQuery("⏳ Generating API key...");
+  await ctx.answerCbQuery("⏳ Membuat API key baru...");
 
-  const result = await apiKeys.generateApiKey(uid, "default");
-  if (!result.success) {
-    return ctx.replyWithHTML(`<blockquote>❌ ${escapeHTML(result.error)}</blockquote>`, {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
-          [{ text: "🔙 Kembali ke Menu API", callback_data: `apikey_menu_${uid}` }],
-        ],
-      },
-    });
+  const res = await apiKeys.regenerateApiKey(uid);
+  if (!res.success) {
+    return ctx.replyWithHTML(`<blockquote>❌ Gagal membuat key baru: ${escapeHTML(res.error)}</blockquote>`);
   }
-
-  await ctx.replyWithHTML(
-    `<blockquote>✅ <b>API KEY BERHASIL DIBUAT!</b>
-━━━━━━━━━━━━━━━━
-🔑 API Key:
-<code>${result.key}</code>
-
-⚠️ <b>Simpan key ini! Key hanya ditampilkan sekali.</b>
-━━━━━━━━━━━━━━━━
-📖 Cara pakai:
-<code>Authorization: Bearer ${result.key}</code>
-
-Base URL: <code>${config.API_DOCS_URL}/api/v1</code>
-📖 Docs: ${config.API_DOCS_URL}</blockquote>`,
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
-          [{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }],
-        ],
-      },
-    }
-  );
+  await showApiKeyMenu(ctx);
 });
 
-bot.action(/^apikey_list_(\d+)$/, async (ctx) => {
+bot.action(/^apikey_revoke_(\d+)$/, async (ctx) => {
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return ctx.answerCbQuery("❌ Bukan akun kamu.", { show_alert: true });
+  await ctx.answerCbQuery("🗑️ Menonaktifkan key...");
+
+  await apiKeys.revokeAllApiKeys(uid);
+  const docsUrl = config.API_DOCS_URL || "https://api.calabay.my.id";
+
+  const revokeText = `<blockquote>🗑️ <b>API KEY DINONAKTIFKAN</b>
+━━━━━━━━━━━━━━━━
+API Key Anda telah dinonaktifkan (Revoked) dan tidak dapat digunakan lagi untuk memanggil API.
+
+Tekan tombol di bawah untuk mengaktifkan kembali API Key baru kapan saja.</blockquote>`;
+
+  const keyboard = {
+    inline_keyboard: [
+      [{ text: "🔑 Aktifkan API Key Baru", callback_data: `apikey_regen_${uid}` }],
+      [{ text: "📖 Buka API Docs", url: docsUrl }],
+      [{ text: "🔙 Menu Utama", callback_data: `apikey_back_home_${uid}` }],
+    ],
+  };
+
+  try {
+    await ctx.editMessageText(revokeText, {
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      reply_markup: keyboard,
+    });
+  } catch {
+    await ctx.replyWithHTML(revokeText, {
+      disable_web_page_preview: true,
+      reply_markup: keyboard,
+    });
+  }
+});
+
+bot.action(/^apikey_back_home_(\d+)$/, async (ctx) => {
   const uid = parseInt(ctx.match[1]);
   if (uid !== ctx.from.id) return ctx.answerCbQuery("❌ Bukan akun kamu.", { show_alert: true });
   await ctx.answerCbQuery();
-
-  const keys = await apiKeys.listApiKeys(uid);
-  if (!keys.length) {
-    return ctx.replyWithHTML("<blockquote>📋 Kamu belum punya API key. Tekan tombol di bawah untuk membuat.</blockquote>", {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔑 Buat API Key Sekarang", callback_data: `apikey_gen_${uid}` }],
-          [{ text: "🔙 Kembali ke Menu API", callback_data: `apikey_menu_${uid}` }],
-        ],
-      },
-    });
-  }
-
-  const activeKeys = keys.filter(k => k.isActive);
-  const revokedKeys = keys.filter(k => !k.isActive);
-
-  const lines = keys.map((k, i) => {
-    const status = k.isActive ? "✅ Aktif" : "❌ Revoked (Nonaktif)";
-    const masked = apiKeys.maskKey(k.key);
-    const used = k.totalRequests || 0;
-    const lastUsed = k.lastUsed ? new Date(k.lastUsed).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) : "Belum pernah";
-    return `${i + 1}. <code>${masked}</code>
-   ${status} | 📊 ${used} request | ⏰ ${lastUsed}`;
-  }).join("\n\n");
-
-  let note = "";
-  if (activeKeys.length === 0 && revokedKeys.length > 0) {
-    note = "\n\n💡 <i>Semua key di atas sudah dinonaktifkan (Revoked). Kuota kamu masih kosong 3 slot. Tekan tombol di bawah untuk membuat key aktif baru!</i>";
-  }
-
-  const inlineKeyboard = [
-    [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
-  ];
-
-  if (activeKeys.length > 0) {
-    inlineKeyboard.push([{ text: "🗑️ Revoke Key Aktif", callback_data: `apikey_revoke_all_${uid}` }]);
-  }
-
-  if (revokedKeys.length > 0) {
-    inlineKeyboard.push([{ text: "🧹 Hapus Riwayat Revoked", callback_data: `apikey_clean_${uid}` }]);
-  }
-
-  inlineKeyboard.push([{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }]);
-
-  await ctx.replyWithHTML(
-    `<blockquote>📋 <b>API KEYS KAMU</b>
-━━━━━━━━━━━━━━━━
-${lines}
-━━━━━━━━━━━━━━━━
-📊 Kuota Key Aktif: <b>${activeKeys.length}/${apiKeys.MAX_KEYS_PER_USER}</b>${note}</blockquote>`,
-    {
-      reply_markup: {
-        inline_keyboard: inlineKeyboard,
-      },
-    }
-  );
+  await ctx.deleteMessage().catch(() => {});
+  await showMainMenu(ctx, uid);
 });
 
-bot.action(/^apikey_clean_(\d+)$/, async (ctx) => {
-  const uid = parseInt(ctx.match[1]);
-  if (uid !== ctx.from.id) return ctx.answerCbQuery("❌ Bukan akun kamu.", { show_alert: true });
-  await ctx.answerCbQuery("🧹 Membersihkan...");
-
-  const res = await apiKeys.cleanupRevokedKeys(uid);
-  await ctx.replyWithHTML(
-    `<blockquote>🧹 <b>RIWAYAT DIBERSIHKAN</b>
-━━━━━━━━━━━━━━━━
-Berhasil menghapus <b>${res.count || 0}</b> key yang sudah revoked dari database.
-Gunakan tombol di bawah untuk membuat key aktif baru.</blockquote>`,
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
-          [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
-          [{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }],
-        ],
-      },
-    }
-  );
-});
-
-bot.action(/^apikey_revoke_all_(\d+)$/, async (ctx) => {
-  const uid = parseInt(ctx.match[1]);
+// Backwards compatibility for legacy button callbacks
+bot.action(/^(apikey_gen_|apikey_list_|apikey_clean_|apikey_revoke_all_)(\d+)$/, async (ctx) => {
+  const uid = parseInt(ctx.match[2]);
   if (uid !== ctx.from.id) return ctx.answerCbQuery("❌ Bukan akun kamu.", { show_alert: true });
   await ctx.answerCbQuery();
-
-  const result = await apiKeys.revokeAllApiKeys(uid);
-  await ctx.replyWithHTML(
-    `<blockquote>🗑️ <b>SEMUA API KEY DIREVOKE</b>
-━━━━━━━━━━━━━━━━
-${result.count > 0 ? `✅ ${result.count} key aktif berhasil direvoke.` : "Tidak ada key aktif untuk direvoke."}
-Gunakan tombol di bawah untuk membuat key baru.</blockquote>`,
-    {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
-          [{ text: "🧹 Hapus Riwayat Revoked", callback_data: `apikey_clean_${uid}` }],
-          [{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }],
-        ],
-      },
-    }
-  );
+  await showApiKeyMenu(ctx);
 });
 
 bot.command("help", async (ctx) => {
