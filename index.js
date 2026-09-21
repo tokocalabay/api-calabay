@@ -2122,9 +2122,8 @@ async function showWahubServices(ctx, uid, editMsgId = null) {
   const start = (page - 1) * WA_SERVICE_PAGE_SIZE;
   const items = services.slice(start, start + WA_SERVICE_PAGE_SIZE);
   const buttons = threeColumnButtons(items, (service, index) => {
-    const price = db.calculatePrice("wahub", service.price, service.id, uid);
     return Markup.button.callback(
-      `${shortButtonText(service.name, 10)} · ${rupiah(price)}`,
+      shortButtonText(service.name, 14),
       `wahub_svc_${start + index}_${uid}`
     );
   });
@@ -2343,9 +2342,8 @@ async function showEngineUnicornServices(ctx, uid, editMsgId = null) {
   const start = (page - 1) * WA_SERVICE_PAGE_SIZE;
   const items = services.slice(start, start + WA_SERVICE_PAGE_SIZE);
   const buttons = threeColumnButtons(items, (service, index) => {
-    const price = db.calculatePrice("engineunicorn", service.price, service.id, uid);
     return Markup.button.callback(
-      `${shortButtonText(service.name, 10)} · ${rupiah(price)}`,
+      shortButtonText(service.name, 14),
       `eu_svc_${start + index}_${uid}`
     );
   });
@@ -2823,7 +2821,7 @@ async function showHeroServices(ctx, uid, editMsgId = null) {
   const pageItems = services.slice(start, start + 30);
   const buttons = threeColumnButtons(pageItems, (service) =>
     Markup.button.callback(
-      shortButtonText(service.name, 12),
+      shortButtonText(service.name, 14),
       `hs_svc_${service.id}_${uid}`
     )
   );
@@ -3225,7 +3223,7 @@ async function showRumahOtpServices(ctx, uid, editMsgId = null) {
   const pageItems = services.slice(start, start + 30);
   const buttons = threeColumnButtons(pageItems, (service, index) =>
     Markup.button.callback(
-      shortButtonText(service.name, 12),
+      shortButtonText(service.name, 14),
       `ro_svc_${start + index}_${uid}`
     )
   );
@@ -3569,7 +3567,7 @@ async function showOtpcepatServices(ctx, uid, editMsgId = null) {
   const pageItems = services.slice(start, start + 30);
   const buttons = threeColumnButtons(pageItems, (service) =>
     Markup.button.callback(
-      `${shortButtonText(service.name, 10)} · ${rupiah(db.calculatePrice("otpcepat", service.price, service.id, uid))}`,
+      shortButtonText(service.name, 14),
       `svc_${service.id}_${uid}`
     )
   );
