@@ -3,34 +3,30 @@
     <linearGradient id="calabay-grad" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#818cf8" />
       <stop offset="50%" stop-color="#6366f1" />
-      <stop offset="100%" stop-color="#38bdf8" />
+      <stop offset="100%" stop-color="#06b6d4" />
     </linearGradient>
     <linearGradient id="calabay-bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" stop-color="#18181b" />
+      <stop offset="0%" stop-color="#141419" />
       <stop offset="100%" stop-color="#09090b" />
     </linearGradient>
     <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
-      <feGaussianBlur stdDeviation="3" result="blur" />
+      <feGaussianBlur stdDeviation="3.5" result="blur" />
       <feComposite in="SourceGraphic" in2="blur" operator="over" />
     </filter>
   </defs>
 
   <!-- Background Squircle -->
-  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#calabay-bg)" stroke="url(#calabay-grad)" stroke-width="4"/>
+  <rect x="6" y="6" width="116" height="116" rx="28" fill="url(#calabay-bg)" stroke="url(#calabay-grad)" stroke-width="3.5"/>
 
-  <!-- Glowing Microchip Center Matching Site Brand -->
-  <g filter="url(#glow)" stroke="url(#calabay-grad)" fill="none" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
-    <rect x="34" y="34" width="60" height="60" rx="8" fill="#131317" stroke-width="7"/>
-    <rect x="51" y="51" width="26" height="26" rx="4" fill="url(#calabay-grad)" fill-opacity="0.15" stroke-width="5"/>
+  <!-- Bold Glowing Calabay 'C' Emblem -->
+  <g filter="url(#glow)">
+    <path d="M88 38 A36 36 0 1 0 88 90" 
+          fill="none" 
+          stroke="url(#calabay-grad)" 
+          stroke-width="15" 
+          stroke-linecap="round"/>
     
-    <!-- Pins -->
-    <line x1="50" y1="20" x2="50" y2="34"/>
-    <line x1="78" y1="20" x2="78" y2="34"/>
-    <line x1="50" y1="94" x2="50" y2="108"/>
-    <line x1="78" y1="94" x2="78" y2="108"/>
-    <line x1="94" y1="50" x2="108" y2="50"/>
-    <line x1="94" y1="78" x2="108" y2="78"/>
-    <line x1="20" y1="50" x2="34" y2="50"/>
-    <line x1="20" y1="78" x2="34" y2="78"/>
+    <!-- Central Active Verification / Security Dot -->
+    <circle cx="64" cy="64" r="8.5" fill="#10b981" />
   </g>
 </svg>
