@@ -7068,8 +7068,11 @@ bot.action(/^apikey_list_(\d+)$/, async (ctx) => {
     });
   }
 
+  const activeKeys = keys.filter(k => k.isActive);
+  const revokedKeys = keys.filter(k => !k.isActive);
+
   const lines = keys.map((k, i) => {
-    const status = k.isActive ? "✅ Aktif" : "❌ Revoked";
+    const status = k.isActive ? "✅ Aktif" : "❌ Revoked (Nonaktif)";
     const masked = apiKeys.maskKey(k.key);
     const used = k.totalRequests || 0;
     const lastUsed = k.lastUsed ? new Date(k.lastUsed).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) : "Belum pernah";
@@ -7077,17 +7080,55 @@ bot.action(/^apikey_list_(\d+)$/, async (ctx) => {
    ${status} | 📊 ${used} request | ⏰ ${lastUsed}`;
   }).join("\n\n");
 
+  let note = "";
+  if (activeKeys.length === 0 && revokedKeys.length > 0) {
+    note = "\n\n💡 <i>Semua key di atas sudah dinonaktifkan (Revoked). Kuota kamu masih kosong 3 slot. Tekan tombol di bawah untuk membuat key aktif baru!</i>";
+  }
+
+  const inlineKeyboard = [
+    [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
+  ];
+
+  if (activeKeys.length > 0) {
+    inlineKeyboard.push([{ text: "🗑️ Revoke Key Aktif", callback_data: `apikey_revoke_all_${uid}` }]);
+  }
+
+  if (revokedKeys.length > 0) {
+    inlineKeyboard.push([{ text: "🧹 Hapus Riwayat Revoked", callback_data: `apikey_clean_${uid}` }]);
+  }
+
+  inlineKeyboard.push([{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }]);
+
   await ctx.replyWithHTML(
     `<blockquote>📋 <b>API KEYS KAMU</b>
 ━━━━━━━━━━━━━━━━
 ${lines}
 ━━━━━━━━━━━━━━━━
-Max: ${apiKeys.MAX_KEYS_PER_USER} key per akun</blockquote>`,
+📊 Kuota Key Aktif: <b>${activeKeys.length}/${apiKeys.MAX_KEYS_PER_USER}</b>${note}</blockquote>`,
+    {
+      reply_markup: {
+        inline_keyboard: inlineKeyboard,
+      },
+    }
+  );
+});
+
+bot.action(/^apikey_clean_(\d+)$/, async (ctx) => {
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return ctx.answerCbQuery("❌ Bukan akun kamu.", { show_alert: true });
+  await ctx.answerCbQuery("🧹 Membersihkan...");
+
+  const res = await apiKeys.cleanupRevokedKeys(uid);
+  await ctx.replyWithHTML(
+    `<blockquote>🧹 <b>RIWAYAT DIBERSIHKAN</b>
+━━━━━━━━━━━━━━━━
+Berhasil menghapus <b>${res.count || 0}</b> key yang sudah revoked dari database.
+Gunakan tombol di bawah untuk membuat key aktif baru.</blockquote>`,
     {
       reply_markup: {
         inline_keyboard: [
           [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
-          [{ text: "🗑️ Revoke Semua", callback_data: `apikey_revoke_all_${uid}` }],
+          [{ text: "📋 Lihat API Key Saya", callback_data: `apikey_list_${uid}` }],
           [{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }],
         ],
       },
@@ -7104,12 +7145,13 @@ bot.action(/^apikey_revoke_all_(\d+)$/, async (ctx) => {
   await ctx.replyWithHTML(
     `<blockquote>🗑️ <b>SEMUA API KEY DIREVOKE</b>
 ━━━━━━━━━━━━━━━━
-${result.count > 0 ? `✅ ${result.count} key berhasil direvoke.` : "Tidak ada key aktif untuk direvoke."}
+${result.count > 0 ? `✅ ${result.count} key aktif berhasil direvoke.` : "Tidak ada key aktif untuk direvoke."}
 Gunakan tombol di bawah untuk membuat key baru.</blockquote>`,
     {
       reply_markup: {
         inline_keyboard: [
           [{ text: "🔑 Buat API Key Baru", callback_data: `apikey_gen_${uid}` }],
+          [{ text: "🧹 Hapus Riwayat Revoked", callback_data: `apikey_clean_${uid}` }],
           [{ text: "🔙 Menu API", callback_data: `apikey_menu_${uid}` }],
         ],
       },
