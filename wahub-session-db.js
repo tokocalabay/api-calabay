@@ -116,7 +116,15 @@ function normalizeUserId(userId) {
 function get(userId) {
   const data = ensureCache();
   const value = data[normalizeUserId(userId)];
-  if (Array.isArray(value)) return value[0] || null;
+  if (Array.isArray(value)) {
+    const active = value.find((item) =>
+      item &&
+      item.step === "tunggu_otp" &&
+      ["waiting", "pending"].includes(String(item.status || "").toLowerCase())
+    );
+    if (active) return active;
+    return value[value.length - 1] || null;
+  }
   return value || null;
 }
 
@@ -149,6 +157,9 @@ function set(userId, session) {
     : -1;
   if (index >= 0) existing[index] = { ...session };
   else existing.push({ ...session });
+  if (existing.length > 10) {
+    existing.splice(0, existing.length - 10);
+  }
   data[key] = existing;
   _sessionsCache = data;
 

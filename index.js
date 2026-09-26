@@ -10,6 +10,7 @@ const wahubSessionDb = require("./wahub-session-db");
 const otpcepat = require("./lib/otpcepat");
 const herosms = require("./lib/herosms");
 const rumahotp = require("./lib/rumahotp");
+const fastbit = require("./lib/fastbit");
 const { createPayment, cekPaid, cancelQris } = require("./lib/payment");
 const { createZip } = require("./lib/zip");
 const apiKeys = require("./lib/api-keys");
@@ -126,13 +127,9 @@ function isWahubWaitingSession(sess) {
 }
 
 function isWahubPaidSession(sess) {
-  if (sess?.hasReceivedOtp || sess?.otpReceived || sess?.firstOtp || sess?.paidAt) {
-    return true;
-  }
-  const statuses = [sess?.status, sess?.providerStatus]
-    .filter((value) => value !== undefined && value !== null && String(value).trim())
-    .map((value) => normalizeWahubStatus(value));
-  return statuses.includes("paid");
+  const hasOtp = Boolean(sess?.lastOtp || sess?.firstOtp || sess?.otp);
+  if (!hasOtp) return false;
+  return true;
 }
 
 function canRetryWahubSession(sess) {
@@ -152,7 +149,7 @@ function getActiveWahubSessions(uid) {
   for (const sess of all) {
     if (isWahubWaitingSession(sess)) {
       if (sess.expiresAt && now > sess.expiresAt) {
-        if (sess.hasReceivedOtp || isWahubPaidSession(sess)) {
+        if (isWahubPaidSession(sess)) {
           sess.status = "paid";
           sess.step = "selesai";
           sess.finishedAt = new Date().toISOString();
@@ -189,7 +186,7 @@ function wahubRetryCount(sess) {
 
 function refundWahubOrder(uid, sess) {
   if (!sess?.trxId) return { refunded: false, reason: "missing-transaction", amount: 0 };
-  if (isWahubPaidSession(sess) || sess?.hasReceivedOtp || sess?.otpReceived || sess?.firstOtp || sess?.paidAt) {
+  if (isWahubPaidSession(sess)) {
     return {
       refunded: false,
       reason: "already-paid",
@@ -202,8 +199,9 @@ function refundWahubOrder(uid, sess) {
 function normalizeWahubStatus(value) {
   const status = String(value || "").trim().toLowerCase();
   if (!status) return "waiting";
-  if (["cancel", "canceled", "cancelled"].includes(status)) return "cancelled";
-  if (["complete", "completed", "success", "succeed"].includes(status)) return "paid";
+  if (["cancel", "canceled", "cancelled", "expired", "failed"].includes(status)) return "cancelled";
+  if (["complete", "completed", "paid"].includes(status)) return "paid";
+  if (["waiting", "pending", "active", "processing", "success", "ok"].includes(status)) return "waiting";
   return status.replace(/[^a-z0-9_-]+/g, "_");
 }
 
@@ -218,7 +216,7 @@ function saveWahubStatus(uid, sess, status, extra = {}) {
 }
 
 async function cancelWahubOrder(orderId, sess) {
-  if (sess && (isWahubPaidSession(sess) || sess.hasReceivedOtp || sess.otpReceived || sess.firstOtp || sess.paidAt)) {
+  if (sess && isWahubPaidSession(sess)) {
     return {
       confirmed: false,
       rejected: true,
@@ -228,10 +226,10 @@ async function cancelWahubOrder(orderId, sess) {
 
   if (sess?.provider === "engineunicorn") {
     const res = await engineunicorn.cancel(orderId);
-    if (res.confirmed) {
-      return { confirmed: true, response: res.response };
+    if (res?.confirmed || res?.status === "cancelled" || res?.state === "cancelled") {
+      return { confirmed: true, response: res?.response || res };
     }
-    return { confirmed: false, response: res };
+    return { confirmed: Boolean(res?.confirmed), response: res };
   }
 
   const token = sess?.token || null;
@@ -244,7 +242,7 @@ async function cancelWahubOrder(orderId, sess) {
     if (
       result?.ok === true ||
       result?.released === true ||
-      ["cancelled", "canceled", "cancel", "success", "ok", ""].includes(String(result?.state || "").toLowerCase())
+      ["cancelled", "canceled", "cancel", "released"].includes(String(result?.state || result?.status || "").toLowerCase())
     ) {
       return { confirmed: true, response: result };
     }
@@ -708,6 +706,7 @@ bot.start(async (ctx) => {
     ctx.from.username || ctx.from.first_name,
     getReferralPayload(ctx)
   );
+  await db.syncUser(uid);
 
   const joinStatus = await checkMandatoryJoin(ctx, uid);
   if (!joinStatus.ok) {
@@ -807,6 +806,7 @@ bot.action(/^lang_(id|en)_(\d+)$/, async (ctx) => {
 });
 
 async function showMainMenu(ctx, uid) {
+  await db.syncUser(uid);
   const coin = db.getCoin(uid);
   const name = ctx.from.username ? "@" + ctx.from.username : ctx.from.first_name;
   const en   = isEN(uid);
@@ -1179,7 +1179,7 @@ bot.on("text", async (ctx, next) => {
     delete sessions[uid];
     if (ok) {
       const display = parsed.mode === "percent" ? `${parsed.value}%` : rupiah(parsed.value);
-      const targetLabel = target === "all" ? "Semua Server" : (target === "herosms" ? "Server 1⃣ (SMS)" : target === "rumahotp" ? "Server 2⃣ (SMS)" : target === "wahub" ? "Server 1⃣ (WA)" : "Server 2⃣ (WA)");
+      const targetLabel = target === "all" ? "Semua Server" : (target === "fastbit" || target === "herosms" ? "Server 1⃣ (SMS)" : target === "rumahotp" ? "Server 2⃣ (FlashCall + SMS)" : target === "wahub" ? "Server 1⃣ (WA)" : "Server 2⃣ (WA)");
       return ctx.replyWithHTML(`<blockquote>✅ Profit default <b>${targetLabel}</b> berhasil disimpan: <b>${display}</b> (${parsed.mode}).</blockquote>`);
     }
     return ctx.replyWithHTML("<blockquote>❌ Gagal menyimpan profit server.</blockquote>");
@@ -1211,8 +1211,8 @@ bot.on("text", async (ctx, next) => {
     if (!query) {
       return ctx.reply("❌ Masukkan nama layanan yang ingin dicari.");
     }
-    const server = sess.searchServer;
-    const masterList = server === "herosms" ? (sess.heroServices || []) : (sess.roServices || []);
+    const server = sess.searchServer || "fastbit";
+    const masterList = sess.fastbitServices || sess.heroServices || sess.roServices || [];
     const q = query.toLowerCase();
     const matched = masterList.filter((s) =>
       String(s.name || "").toLowerCase().includes(q) ||
@@ -1234,11 +1234,12 @@ Tidak ada layanan yang cocok dengan kata kunci: <b>${escapeHTML(query)}</b>.</bl
     sess.filteredServices = matched;
     sess.searchQuery = query;
     sess.servicePage = 1;
-    sess.step = server === "herosms" ? "hs_pilih_service" : "ro_pilih_service";
-    if (server === "herosms") {
-      await showHeroServices(ctx, uid);
+    if (server === "fastbit") {
+      sess.step = "fb_pilih_service";
+      await showFastbitServices(ctx, uid);
     } else {
-      await showRumahOtpServices(ctx, uid);
+      sess.step = "hs_pilih_service";
+      await showHeroServices(ctx, uid);
     }
     return;
   }
@@ -1982,35 +1983,37 @@ Silakan pilih server penyedia nomor:
 }
 
 async function showSmsServerChoice(ctx, uid) {
-  const s1Status = db.getProviderStatus("herosms");
+  const s1Status = db.getProviderStatus("fastbit");
   const s2Status = db.getProviderStatus("rumahotp");
 
   if (!s1Status && !s2Status) {
     return ctx.replyWithHTML(
-      "<blockquote>⚠️ <b>LAYANAN NOKOS SMS TUTUP</b>\n\nSemua server penyedia SMS saat ini sedang dalam pemeliharaan atau dinonaktifkan oleh admin. Silakan coba lagi nanti.</blockquote>"
+      "<blockquote>⚠️ <b>LAYANAN NOKOS SMS TUTUP</b>\n\nSemua metode verifikasi SMS saat ini sedang dalam pemeliharaan atau dinonaktifkan oleh admin. Silakan coba lagi nanti.</blockquote>"
     );
   }
 
   const text = `<blockquote>✉️ <b>PILIH SERVER — OTP SMS</b>
 ━━━━━━━━━━━━━━━━
-Silakan pilih server penyedia nomor SMS:
+Silakan pilih server verifikasi yang diinginkan:
 
-<b>Server 1⃣</b>
+<b>Server 1⃣ — SMS Biasa</b>
    Status: ${s1Status ? "🟢 <b>Aktif</b>" : "🔴 <i>Tutup</i>"}
+   Metode: SMS Otomatis
 
-<b>Server 2⃣</b>
+<b>Server 2⃣ — FlashCall + SMS</b>
    Status: ${s2Status ? "🟡 <b>Aktif</b>" : "🔴 <i>Tutup</i>"}
+   Metode: FlashCall & SMS (Kode via Panggilan / SMS)
 ━━━━━━━━━━━━━━━━
 💡 Pilih server di bawah ini untuk melihat daftar layanan dan stok:</blockquote>`;
 
   const keyboardButtons = [
     [
       Markup.button.callback(
-        `${s1Status ? "🟢" : "🔴"} Server 1⃣`,
+        `${s1Status ? "🟢" : "🔴"} Server 1⃣ (SMS)`,
         `choose_sms_server_1_${uid}`
       ),
       Markup.button.callback(
-        `${s2Status ? "🟡" : "🔴"} Server 2⃣`,
+        `${s2Status ? "🟡" : "🔴"} Server 2⃣ (FlashCall)`,
         `choose_sms_server_2_${uid}`
       ),
     ],
@@ -2094,28 +2097,31 @@ bot.action(/^choose_sms_server_1_(\d+)$/, async (ctx) => {
   if (uid !== ctx.from.id) {
     return ctx.answerCbQuery("❌ Tombol ini bukan untuk akun kamu.", { show_alert: true });
   }
-  if (!db.getProviderStatus("herosms")) {
-    return ctx.answerCbQuery("⚠️ Server 1 sedang dinonaktifkan oleh admin.", { show_alert: true });
+  if (!db.getProviderStatus("fastbit")) {
+    return ctx.answerCbQuery("⚠️ Server 1 (SMS) sedang dinonaktifkan oleh admin.", { show_alert: true });
   }
-  await ctx.answerCbQuery("⏳ Memuat layanan Server 1...");
-  const loadMsg = await ctx.replyWithHTML("<blockquote>🔍 <i>Memuat layanan Server 1...</i></blockquote>");
-  const services = await herosms.getServices();
+  await ctx.answerCbQuery("⏳ Memuat layanan Server 1 (SMS)...");
+  const loadMsg = await ctx.replyWithHTML("<blockquote>🔍 <i>Memuat layanan Server 1 (SMS)...</i></blockquote>");
+  const services = await fastbit.getServices();
   if (!services.length) {
     return ctx.telegram.editMessageText(
       ctx.chat.id,
       loadMsg.message_id,
       null,
-      `<blockquote>❌ <b>Layanan tidak tersedia.</b>\n${escapeHTML(herosms.getLastError() || "Daftar layanan sedang tidak tersedia.")}</blockquote>`,
+      `<blockquote>❌ <b>Layanan tidak tersedia.</b>\n${escapeHTML(fastbit.getLastError() || "Daftar layanan sedang tidak tersedia.")}</blockquote>`,
       { parse_mode: "HTML" }
     );
   }
   sessions[uid] = {
-    step: "hs_pilih_service",
-    server: "herosms",
-    heroServices: services,
+    step: "fb_pilih_service",
+    server: "fastbit",
+    smsServer: 1,
+    verificationType: "sms",
+    serverLabel: "Server 1⃣ (SMS)",
+    fastbitServices: services,
     servicePage: 1,
   };
-  await showHeroServices(ctx, uid, loadMsg.message_id);
+  await showFastbitServices(ctx, uid, loadMsg.message_id);
 });
 
 bot.action(/^choose_sms_server_2_(\d+)$/, async (ctx) => {
@@ -2124,27 +2130,30 @@ bot.action(/^choose_sms_server_2_(\d+)$/, async (ctx) => {
     return ctx.answerCbQuery("❌ Tombol ini bukan untuk akun kamu.", { show_alert: true });
   }
   if (!db.getProviderStatus("rumahotp")) {
-    return ctx.answerCbQuery("⚠️ Server 2 sedang dinonaktifkan oleh admin.", { show_alert: true });
+    return ctx.answerCbQuery("⚠️ Server 2 (FlashCall) sedang dinonaktifkan oleh admin.", { show_alert: true });
   }
-  await ctx.answerCbQuery("⏳ Memuat layanan Server 2...");
-  const loadMsg = await ctx.replyWithHTML("<blockquote>🔍 <i>Memuat layanan Server 2...</i></blockquote>");
-  const services = await rumahotp.getServices();
+  await ctx.answerCbQuery("⏳ Memuat layanan Server 2 (FlashCall + SMS)...");
+  const loadMsg = await ctx.replyWithHTML("<blockquote>🔍 <i>Memuat layanan Server 2 (FlashCall + SMS)...</i></blockquote>");
+  const services = await herosms.getServices();
   if (!services.length) {
     return ctx.telegram.editMessageText(
       ctx.chat.id,
       loadMsg.message_id,
       null,
-      `<blockquote>❌ <b>Layanan tidak tersedia.</b>\n${escapeHTML(rumahotp.getLastError() || "Daftar layanan Server 2 sedang tidak tersedia.")}</blockquote>`,
+      `<blockquote>❌ <b>Layanan tidak tersedia.</b>\n${escapeHTML(herosms.getLastError() || "Daftar layanan Server 2 sedang tidak tersedia.")}</blockquote>`,
       { parse_mode: "HTML" }
     );
   }
   sessions[uid] = {
-    step: "ro_pilih_service",
-    server: "rumahotp",
-    roServices: services,
+    step: "hs_pilih_service",
+    server: "herosms",
+    smsServer: 2,
+    verificationType: "flashcall",
+    serverLabel: "Server 2⃣ (FlashCall + SMS)",
+    heroServices: services,
     servicePage: 1,
   };
-  await showRumahOtpServices(ctx, uid, loadMsg.message_id);
+  await showHeroServices(ctx, uid, loadMsg.message_id);
 });
 
 bot.action(/^back_to_server_choice_(\d+)$/, async (ctx) => {
@@ -2188,6 +2197,7 @@ Hal ${page}/${totalPage}</blockquote>`;
 }
 
 async function createWahubOrder(ctx, uid, fresh) {
+  await db.syncUser(uid);
   const price = db.calculatePrice("wahub", fresh.price, fresh.id, uid);
   const coin = db.getCoin(uid);
   if (coin < price) {
@@ -2203,16 +2213,27 @@ Silakan deposit coin terlebih dahulu.</blockquote>`,
   }
   const deducted = db.deductCoin(uid, price);
   if (deducted === false) return ctx.reply("❌ Saldo berubah. Silakan coba lagi.");
-  const loadMsg = await ctx.replyWithHTML("<blockquote>⏳ <b>Memproses order...</b></blockquote>");
-  const order = await wahub.rent(fresh.id);
+  await db.persistUser(uid);
+  const loadMsg = await ctx.replyWithHTML("<blockquote>⏳ <b>Memproses order...</b></blockquote>").catch(() => null);
+  let order = null;
+  try {
+    order = await wahub.rent(fresh.id);
+  } catch (err) {
+    console.error("wahub.rent error:", err.message);
+  }
   if (!order?.order_id || !order.token || !order.phone) {
     db.addCoin(uid, price);
-    return ctx.telegram.editMessageText(
-      ctx.chat.id, loadMsg.message_id, null,
-      `<blockquote>❌ <b>Order gagal.</b> Coin sudah dikembalikan.
-${escapeHTML(wahub.getLastError() || "Stok tidak tersedia.")}</blockquote>`,
-      { parse_mode: "HTML" }
-    );
+    await db.persistUser(uid);
+    const failText = `<blockquote>❌ <b>Order gagal.</b> Coin sudah dikembalikan.
+${escapeHTML(wahub.getLastError() || "Stok tidak tersedia.")}</blockquote>`;
+    if (loadMsg?.message_id) {
+      return ctx.telegram.editMessageText(
+        ctx.chat.id, loadMsg.message_id, null,
+        failText,
+        { parse_mode: "HTML" }
+      ).catch(() => ctx.replyWithHTML(failText));
+    }
+    return ctx.replyWithHTML(failText);
   }
   const trxId = db.addTransaction({
     userId: uid, username: ctx.from.username || ctx.from.first_name,
@@ -2355,11 +2376,16 @@ Coin akan dipotong setelah kamu menekan tombol <b>Beli Sekarang</b>.</blockquote
   return ctx.replyWithHTML(confirmText, keyboard);
 });
 
+const buyLocks = new Set();
+
 bot.action(/^wahub_buy_(\d+)_(\d+)$/, async (ctx) => {
   const serviceId = ctx.match[1];
   const uid = parseInt(ctx.match[2]);
   if (uid !== ctx.from.id) {
     return ctx.answerCbQuery("❌ Tombol ini bukan untuk akun kamu.", { show_alert: true });
+  }
+  if (buyLocks.has(uid)) {
+    return ctx.answerCbQuery("⏳ Order sedang diproses, mohon tunggu sebentar...", { show_alert: true });
   }
   if (wahubSessionLimitReached(uid)) {
     return ctx.answerCbQuery(
@@ -2367,14 +2393,19 @@ bot.action(/^wahub_buy_(\d+)_(\d+)$/, async (ctx) => {
       { show_alert: true }
     );
   }
-  await ctx.answerCbQuery("⏳ Memproses order...");
+  buyLocks.add(uid);
+  try {
+    await ctx.answerCbQuery("⏳ Memproses order...");
 
-  const fresh = (await wahub.getServices()).find((service) => String(service.id) === String(serviceId));
-  if (!fresh || fresh.stock <= 0) {
-    return ctx.answerCbQuery("❌ Stok layanan ini baru saja habis.", { show_alert: true });
+    const fresh = (await wahub.getServices()).find((service) => String(service.id) === String(serviceId));
+    if (!fresh || fresh.stock <= 0) {
+      return ctx.answerCbQuery("❌ Stok layanan ini baru saja habis.", { show_alert: true });
+    }
+
+    return await createWahubOrder(ctx, uid, fresh);
+  } finally {
+    setTimeout(() => buyLocks.delete(uid), 1500);
   }
-
-  return createWahubOrder(ctx, uid, fresh);
 });
 
 // ── Server 2: EngineUnicorn flow ──────────────────────────
@@ -2412,6 +2443,7 @@ Hal ${page}/${totalPage}</blockquote>`;
 }
 
 async function createEngineUnicornOrder(ctx, uid, fresh) {
+  await db.syncUser(uid);
   const price = db.calculatePrice("engineunicorn", fresh.price, fresh.id, uid);
   const coin = db.getCoin(uid);
   if (coin < price) {
@@ -2427,16 +2459,27 @@ Silakan deposit coin terlebih dahulu.</blockquote>`,
   }
   const deducted = db.deductCoin(uid, price);
   if (deducted === false) return ctx.reply("❌ Saldo berubah. Silakan coba lagi.");
-  const loadMsg = await ctx.replyWithHTML("<blockquote>⏳ <b>Memproses order ke Server 2...</b></blockquote>");
-  const order = await engineunicorn.rent(fresh.id);
+  await db.persistUser(uid);
+  const loadMsg = await ctx.replyWithHTML("<blockquote>⏳ <b>Memproses order ke Server 2...</b></blockquote>").catch(() => null);
+  let order = null;
+  try {
+    order = await engineunicorn.rent(fresh.id);
+  } catch (err) {
+    console.error("engineunicorn.rent error:", err.message);
+  }
   if (!order?.order_id || !order.phone) {
     db.addCoin(uid, price);
-    return ctx.telegram.editMessageText(
-      ctx.chat.id, loadMsg.message_id, null,
-      `<blockquote>❌ <b>Order Server 2 gagal.</b> Coin sudah dikembalikan.
-${escapeHTML(engineunicorn.getLastError() || "Stok tidak tersedia atau saldo penyedia tidak cukup.")}</blockquote>`,
-      { parse_mode: "HTML" }
-    );
+    await db.persistUser(uid);
+    const failText = `<blockquote>❌ <b>Order Server 2 gagal.</b> Coin sudah dikembalikan.
+${escapeHTML(engineunicorn.getLastError() || "Stok tidak tersedia atau saldo penyedia tidak cukup.")}</blockquote>`;
+    if (loadMsg?.message_id) {
+      return ctx.telegram.editMessageText(
+        ctx.chat.id, loadMsg.message_id, null,
+        failText,
+        { parse_mode: "HTML" }
+      ).catch(() => ctx.replyWithHTML(failText));
+    }
+    return ctx.replyWithHTML(failText);
   }
   const trxId = db.addTransaction({
     userId: uid, username: ctx.from.username || ctx.from.first_name,
@@ -2576,20 +2619,28 @@ bot.action(/^eu_buy_(\d+)_(\d+)$/, async (ctx) => {
   if (uid !== ctx.from.id) {
     return ctx.answerCbQuery("❌ Tombol ini bukan untuk akun kamu.", { show_alert: true });
   }
+  if (buyLocks.has(uid)) {
+    return ctx.answerCbQuery("⏳ Order sedang diproses, mohon tunggu sebentar...", { show_alert: true });
+  }
   if (wahubSessionLimitReached(uid)) {
     return ctx.answerCbQuery(
       `⚠️ Batas sessions order tercapai (maksimal ${MAX_WAHUB_SESSIONS}).`,
       { show_alert: true }
     );
   }
-  await ctx.answerCbQuery("⏳ Memproses order Server 2...");
+  buyLocks.add(uid);
+  try {
+    await ctx.answerCbQuery("⏳ Memproses order Server 2...");
 
-  const fresh = (await engineunicorn.getServices()).find((service) => String(service.id) === String(serviceId));
-  if (!fresh || fresh.stock <= 0) {
-    return ctx.answerCbQuery("❌ Stok layanan ini baru saja habis.", { show_alert: true });
+    const fresh = (await engineunicorn.getServices()).find((service) => String(service.id) === String(serviceId));
+    if (!fresh || fresh.stock <= 0) {
+      return ctx.answerCbQuery("❌ Stok layanan ini baru saja habis.", { show_alert: true });
+    }
+
+    return await createEngineUnicornOrder(ctx, uid, fresh);
+  } finally {
+    setTimeout(() => buyLocks.delete(uid), 1500);
   }
-
-  return createEngineUnicornOrder(ctx, uid, fresh);
 });
 
 // ── ⭐ FITUR RESELLER (HARGA KHUSUS & TARGET BULANAN) ──────────
@@ -2833,34 +2884,510 @@ bot.action(/^back_server_(\d+)$/, async (ctx) => {
   await showServerChoice(ctx);
 });
 
-// ── Server 1⃣ SMS — Layanan → Negara → Operator ────────────────
-async function cmdBeliHeroSms(ctx) {
-  if (!db.getProviderStatus("herosms")) return ctx.reply("⚠️ Server 1 sedang ditutup.");
-  const loadMsg = await ctx.replyWithHTML("<blockquote>🔍 <i>Memuat layanan Server 1...</i></blockquote>");
-  const services = await herosms.getServices();
+// ── Server 1⃣ SMS — Layanan → Negara → Operator ─────────
+async function cmdBeliFastbit(ctx) {
+  if (!db.getProviderStatus("fastbit")) return ctx.reply("⚠️ Server 1 (SMS) sedang ditutup.");
+  const loadMsg = await ctx.replyWithHTML("<blockquote>🔍 <i>Memuat layanan Server 1 (SMS)...</i></blockquote>");
+  const services = await fastbit.getServices();
 
   if (!services.length) {
     return ctx.telegram.editMessageText(
       ctx.chat.id,
       loadMsg.message_id,
       null,
-      `<blockquote>❌ <b>Layanan Server 1 tidak tersedia.</b>\n${escapeHTML(herosms.getLastError() || "Daftar layanan sedang tidak tersedia.")}</blockquote>`,
+      `<blockquote>❌ <b>Layanan Server 1 (SMS) tidak tersedia.</b>\n${escapeHTML(fastbit.getLastError() || "Daftar layanan sedang tidak tersedia.")}</blockquote>`,
       { parse_mode: "HTML" }
     );
   }
 
   const uid = ctx.from.id;
   sessions[uid] = {
-    step: "hs_pilih_service",
-    server: "herosms",
-    heroServices: services,
+    step: "fb_pilih_service",
+    server: "fastbit",
+    smsServer: 1,
+    serverLabel: "Server 1⃣ (SMS)",
+    fastbitServices: services,
     servicePage: 1,
   };
-  await showHeroServices(ctx, uid, loadMsg.message_id);
+  await showFastbitServices(ctx, uid, loadMsg.message_id);
+}
+
+async function showFastbitServices(ctx, uid, editMsgId = null) {
+  const sess = sessions[uid];
+  const services = sess?.filteredServices || sess?.fastbitServices || [];
+  const totalPage = Math.max(1, Math.ceil(services.length / 30));
+  const page = Math.min(Math.max(sess.servicePage || 1, 1), totalPage);
+  sess.servicePage = page;
+  const start = (page - 1) * 30;
+  const pageItems = services.slice(start, start + 30);
+  const buttons = threeColumnButtons(pageItems, (service) =>
+    Markup.button.callback(
+      shortButtonText(service.name, 14),
+      `fb_svc_${service.id}_${uid}`
+    )
+  );
+  addPageButtons(
+    buttons,
+    page,
+    totalPage,
+    `fb_service_pg_${uid}_${page - 1}`,
+    `fb_service_pg_${uid}_${page + 1}`,
+    `back_fb_server_${uid}`
+  );
+
+  if (sess?.filteredServices) {
+    buttons.push([
+      Markup.button.callback("🔍 Cari Lagi", `search_sms_svc_fastbit_${uid}`),
+      Markup.button.callback("❌ Reset Pencarian", `reset_sms_svc_fastbit_${uid}`),
+    ]);
+  } else {
+    buttons.push([
+      Markup.button.callback("🔍 Cari Layanan", `search_sms_svc_fastbit_${uid}`),
+    ]);
+  }
+
+  const teks = sess?.filteredServices
+    ? `<blockquote>🔧 <b>SERVER 1⃣ (SMS) — HASIL PENCARIAN</b>
+🔍 Kata kunci: <b>${escapeHTML(sess.searchQuery || "")}</b> (${services.length} layanan)
+━━━━━━━━━━━━━━━━
+Hal ${page}/${totalPage}</blockquote>`
+    : `<blockquote>🔧 <b>SERVER 1⃣ (SMS) — PILIH LAYANAN</b>
+━━━━━━━━━━━━━━━━
+Pilih aplikasi untuk melanjutkan:
+Hal ${page}/${totalPage}</blockquote>`;
+
+  const options = { parse_mode: "HTML", reply_markup: Markup.inlineKeyboard(buttons).reply_markup };
+  if (editMsgId) return ctx.telegram.editMessageText(ctx.chat.id, editMsgId, null, teks, options).catch(() => ctx.replyWithHTML(teks, options));
+  return ctx.editMessageText(teks, options).catch(() => ctx.replyWithHTML(teks, options));
+}
+
+bot.action(/^fb_service_pg_(\d+)_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return;
+  const sess = sessions[uid];
+  if (!sess || sess.server !== "fastbit" || sess.step !== "fb_pilih_service") {
+    return ctx.answerCbQuery("❌ Sesi habis.", { show_alert: true });
+  }
+  sess.servicePage = parseInt(ctx.match[2]);
+  await showFastbitServices(ctx, uid);
+});
+
+bot.action(/^back_fb_server_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return;
+  await ctx.deleteMessage().catch(() => {});
+  await showSmsServerChoice(ctx, uid);
+});
+
+bot.action(/^fb_svc_([A-Za-z0-9_-]+)_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.deleteMessage().catch(() => {});
+
+  const serviceId = String(ctx.match[1]);
+  const uid = parseInt(ctx.match[2]);
+  if (uid !== ctx.from.id) return;
+
+  const sess = sessions[uid];
+  const list = sess?.filteredServices || sess?.fastbitServices || [];
+  const service = list.find((item) => String(item.id) === serviceId);
+  if (!sess || sess.server !== "fastbit" || !service) {
+    return ctx.reply("❌ Sesi habis. Ulangi /buynokos");
+  }
+
+  const loadMsg = await ctx.replyWithHTML("<blockquote>🔍 <i>Memuat negara dan penawaran Server 1...</i></blockquote>");
+  const countries = await fastbit.getCountriesForService(serviceId);
+  if (!countries.length) {
+    return ctx.telegram.editMessageText(
+      ctx.chat.id,
+      loadMsg.message_id,
+      null,
+      `<blockquote>❌ <b>Stok negara tidak tersedia.</b>\n${escapeHTML(fastbit.getLastError() || "Belum ada negara yang memiliki stok untuk layanan ini.")}</blockquote>`,
+      { parse_mode: "HTML" }
+    );
+  }
+
+  sess.serviceId = serviceId;
+  sess.serviceName = service.name;
+  sess.fbCountries = countries;
+  sess.countryPage = 1;
+  sess.step = "fb_pilih_country";
+  await showFastbitCountries(ctx, uid, loadMsg.message_id);
+});
+
+async function showFastbitCountries(ctx, uid, editMsgId = null) {
+  const sess = sessions[uid];
+  const countries = sess?.fbCountries || [];
+  const totalPage = Math.max(1, Math.ceil(countries.length / LIST_PAGE_SIZE));
+  const page = Math.min(Math.max(sess.countryPage || 1, 1), totalPage);
+  sess.countryPage = page;
+  const start = (page - 1) * LIST_PAGE_SIZE;
+  const pageItems = countries.slice(start, start + LIST_PAGE_SIZE);
+  const buttons = twoColumnButtons(pageItems, (country) => {
+    const baseIdr = country.price;
+    const retailPrice = db.calculatePrice("fastbit", baseIdr, sess.serviceId, uid);
+    const stock = country.stock ? ` (${formatStock(country.stock)})` : "";
+    return Markup.button.callback(
+      `🌍 ${shortButtonText(country.name, 12)} · ${rupiah(retailPrice)}${stock}`,
+      `fb_country_${country.iso}_${uid}`
+    );
+  });
+  addPageButtons(
+    buttons,
+    page,
+    totalPage,
+    `fb_country_pg_${uid}_${page - 1}`,
+    `fb_country_pg_${uid}_${page + 1}`,
+    `back_fb_service_${uid}`
+  );
+
+  const teks = `<blockquote>🌍 <b>SERVER 1⃣ (SMS) — PILIH NEGARA</b>
+🔧 Layanan: <b>${escapeHTML(sess.serviceName || "")}</b>
+━━━━━━━━━━━━━━━━
+Pilih negara yang tersedia:
+Hal ${page}/${totalPage}</blockquote>`;
+  const options = { parse_mode: "HTML", reply_markup: Markup.inlineKeyboard(buttons).reply_markup };
+  if (editMsgId) return ctx.telegram.editMessageText(ctx.chat.id, editMsgId, null, teks, options).catch(() => ctx.replyWithHTML(teks, options));
+  return ctx.editMessageText(teks, options).catch(() => ctx.replyWithHTML(teks, options));
+}
+
+bot.action(/^fb_country_pg_(\d+)_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return;
+  const sess = sessions[uid];
+  if (!sess || sess.server !== "fastbit" || sess.step !== "fb_pilih_country") {
+    return ctx.answerCbQuery("❌ Sesi habis.", { show_alert: true });
+  }
+  sess.countryPage = parseInt(ctx.match[2]);
+  await showFastbitCountries(ctx, uid);
+});
+
+bot.action(/^back_fb_service_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return;
+  const sess = sessions[uid];
+  if (!sess || sess.server !== "fastbit") {
+    return ctx.answerCbQuery("❌ Sesi habis.", { show_alert: true });
+  }
+  sess.step = "fb_pilih_service";
+  await showFastbitServices(ctx, uid);
+});
+
+bot.action(/^fb_country_([A-Za-z0-9_-]+)_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.deleteMessage().catch(() => {});
+  const countryIso = String(ctx.match[1]).toUpperCase();
+  const uid = parseInt(ctx.match[2]);
+  if (uid !== ctx.from.id) return;
+
+  const sess = sessions[uid];
+  const country = sess?.fbCountries?.find((item) => String(item.iso).toUpperCase() === countryIso || String(item.id).toUpperCase() === countryIso);
+  if (!sess || sess.server !== "fastbit" || sess.step !== "fb_pilih_country" || !country) {
+    return ctx.reply("❌ Sesi habis. Ulangi /buynokos");
+  }
+
+  sess.countryId = country.iso;
+  sess.countryName = country.name;
+  sess.countryOffers = country.offers || [];
+
+  if (country.offers && country.offers.length > 1) {
+    sess.operatorPage = 1;
+    sess.step = "fb_pilih_operator";
+    await showFastbitOperators(ctx, uid);
+  } else if (country.offers && country.offers.length === 1) {
+    const offer = country.offers[0];
+    sess.otpServiceId = offer.id;
+    sess.operatorName = offer.operator || "Semua Operator";
+    sess.hargaDasar = offer.price;
+    sess.stock = offer.stock;
+    await showFastbitConfirmation(ctx, uid);
+  } else {
+    sess.otpServiceId = null;
+    sess.operatorName = "Semua Operator";
+    sess.hargaDasar = country.price;
+    sess.stock = country.stock;
+    await showFastbitConfirmation(ctx, uid);
+  }
+});
+
+async function showFastbitOperators(ctx, uid, editMsgId = null) {
+  const sess = sessions[uid];
+  const operators = sess?.countryOffers || [];
+  const totalPage = Math.max(1, Math.ceil(operators.length / LIST_PAGE_SIZE));
+  const page = Math.min(Math.max(sess.operatorPage || 1, 1), totalPage);
+  sess.operatorPage = page;
+  const start = (page - 1) * LIST_PAGE_SIZE;
+  const pageItems = operators.slice(start, start + LIST_PAGE_SIZE);
+  const buttons = twoColumnButtons(pageItems, (offer, index) => {
+    const retailPrice = db.calculatePrice("fastbit", offer.price, sess.serviceId, uid);
+    const stock = offer.stock ? ` (${formatStock(offer.stock)})` : "";
+    return Markup.button.callback(
+      `📡 ${shortButtonText(offer.operator, 10)} · ${rupiah(retailPrice)}${stock}`,
+      `fb_op_${start + index}_${uid}`
+    );
+  });
+  addPageButtons(
+    buttons,
+    page,
+    totalPage,
+    `fb_operator_pg_${uid}_${page - 1}`,
+    `fb_operator_pg_${uid}_${page + 1}`,
+    `back_fb_country_${uid}`
+  );
+
+  const teks = `<blockquote>📡 <b>SERVER 1⃣ (SMS) — PILIH OPERATOR</b>
+🔧 Layanan: <b>${escapeHTML(sess.serviceName)}</b>
+🌍 Negara: <b>${escapeHTML(sess.countryName)}</b>
+━━━━━━━━━━━━━━━━
+Pilih operator:
+Hal ${page}/${totalPage}</blockquote>`;
+  const options = { parse_mode: "HTML", reply_markup: Markup.inlineKeyboard(buttons).reply_markup };
+  if (editMsgId) return ctx.telegram.editMessageText(ctx.chat.id, editMsgId, null, teks, options).catch(() => ctx.replyWithHTML(teks, options));
+  return ctx.editMessageText(teks, options).catch(() => ctx.replyWithHTML(teks, options));
+}
+
+bot.action(/^fb_operator_pg_(\d+)_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const uid = parseInt(ctx.match[1]);
+  const page = parseInt(ctx.match[2]);
+  if (uid !== ctx.from.id) return;
+  const sess = sessions[uid];
+  if (!sess || sess.server !== "fastbit" || sess.step !== "fb_pilih_operator") {
+    return ctx.answerCbQuery("❌ Sesi habis.", { show_alert: true });
+  }
+  sess.operatorPage = page;
+  await showFastbitOperators(ctx, uid);
+});
+
+bot.action(/^back_fb_country_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return;
+  const sess = sessions[uid];
+  if (!sess || sess.server !== "fastbit") {
+    return ctx.answerCbQuery("❌ Sesi habis.", { show_alert: true });
+  }
+  sess.step = "fb_pilih_country";
+  await showFastbitCountries(ctx, uid);
+});
+
+bot.action(/^fb_op_(\d+)_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.deleteMessage().catch(() => {});
+
+  const operatorIndex = parseInt(ctx.match[1]);
+  const uid = parseInt(ctx.match[2]);
+  if (uid !== ctx.from.id) return;
+
+  const sess = sessions[uid];
+  const offer = sess?.countryOffers?.[operatorIndex];
+  if (!sess || sess.server !== "fastbit" || sess.step !== "fb_pilih_operator" || !offer) {
+    return ctx.reply("❌ Sesi habis. Ulangi /buynokos");
+  }
+
+  sess.otpServiceId = offer.id;
+  sess.operatorName = offer.operator;
+  sess.hargaDasar = offer.price;
+  sess.stock = offer.stock;
+  await showFastbitConfirmation(ctx, uid);
+});
+
+async function showFastbitConfirmation(ctx, uid) {
+  const sess = sessions[uid];
+  if (!sess) return;
+  const pDetails = db.getResellerPriceDetails(
+    "fastbit",
+    sess.hargaDasar,
+    sess.serviceId,
+    uid
+  );
+  const hargaUser = pDetails.finalPrice;
+  const priceDisplay = pDetails.isReseller && pDetails.discountAmount > 0
+    ? `<s>${rupiah(pDetails.normalPrice)}</s> <b>${rupiah(hargaUser)}</b> (⭐ Hemat ${rupiah(pDetails.discountAmount)})`
+    : `<b>${rupiah(hargaUser)}</b>`;
+  const coin = db.getCoin(uid);
+  sess.hargaUser = hargaUser;
+  sess.step = "fb_konfirmasi";
+
+  if (coin < hargaUser) {
+    const kurang = hargaUser - coin;
+    const msg = await ctx.replyWithHTML(
+`<blockquote>❌ <b>COIN TIDAK CUKUP</b>
+━━━━━━━━━━━━━━━━
+💰 Harga: <b>${rupiah(hargaUser)}</b>
+🪙 Coin mu: <b>${rupiah(coin)}</b>
+⚠️ Kurang: <b>${rupiah(kurang)}</b>
+━━━━━━━━━━━━━━━━
+Deposit coin dulu:</blockquote>`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("💵 Rp5.000", `dep_5000_${uid}`),
+         Markup.button.callback("💵 Rp10.000", `dep_10000_${uid}`)],
+        [Markup.button.callback("💵 Rp20.000", `dep_20000_${uid}`),
+         Markup.button.callback("💵 Rp50.000", `dep_50000_${uid}`)],
+        [Markup.button.callback("💵 Rp100.000", `dep_100000_${uid}`)],
+      ])
+    );
+    setTimeout(() => bot.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(() => {}), 2 * 60 * 1000);
+    return;
+  }
+
+  const msg = await ctx.replyWithHTML(
+`<blockquote>📱 <b>KONFIRMASI ORDER — SERVER 1 (SMS)</b>
+━━━━━━━━━━━━━━━━
+🔧 Layanan: <b>${escapeHTML(sess.serviceName)}</b>
+⚡ Metode: <b>📩 SMS Biasa</b>
+🌍 Negara: <b>${escapeHTML(sess.countryName)}</b>
+📡 Operator: <b>${escapeHTML(sess.operatorName || "Semua Operator")}</b>
+💰 Harga: ${priceDisplay}
+🪙 Coin mu: <b>${rupiah(coin)}</b>
+━━━━━━━━━━━━━━━━
+Coin akan langsung dipotong setelah konfirmasi.</blockquote>`,
+    Markup.inlineKeyboard([
+       [Markup.button.callback("🛒 Beli Sekarang", `fb_buy_${uid}`)],
+       [Markup.button.callback("❌ Batalkan", `fb_cancel_${uid}`)],
+    ])
+  );
+  setTimeout(() => bot.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(() => {}), 5 * 60 * 1000);
+}
+
+bot.action(/^fb_cancel_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery();
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return;
+  await ctx.deleteMessage().catch(() => {});
+  delete sessions[uid];
+});
+
+async function cancelFastbitOrder(orderUuid) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const result = await fastbit.cancelOrder(orderUuid);
+    if (result) return true;
+    if (attempt < 3) await sleep(1000);
+  }
+  return null;
+}
+
+function refundFastbitOrder(uid, sess) {
+  const trx = db.getTrxById(sess.trxId);
+  if (trx && !trx.refunded) {
+    db.markRefunded(sess.trxId);
+    db.addCoin(uid, sess.hargaUser);
+  }
+}
+
+function pollFastbit(uid, orderUuid, phone, sess) {
+  let found = false;
+  const expiry = Date.now() + OTP_WAIT_MS;
+
+  const iv = setInterval(async () => {
+    if (found) return clearInterval(iv);
+    if (sessions[uid] !== sess || sess.step !== "tunggu_otp") {
+      found = true;
+      return clearInterval(iv);
+    }
+
+    if (Date.now() > expiry) {
+      clearInterval(iv);
+      if (found) return;
+      found = true;
+      sess.cancelProcessing = true;
+      await cancelFastbitOrder(orderUuid);
+      refundFastbitOrder(uid, sess);
+      await bot.telegram.sendMessage(
+        uid,
+        `<blockquote>⚠️ <b>OTP tidak masuk dalam 20 menit.</b>
+Order otomatis dibatalkan.
+Coin dikembalikan.
+🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
+        { parse_mode: "HTML" }
+      ).catch(() => {});
+      delete sessions[uid];
+      return;
+    }
+
+    try {
+      const order = await fastbit.getOrder(orderUuid);
+      if (!order) return;
+
+      const otpCode = order.otp_code;
+      if (otpCode) {
+        found = true;
+        clearInterval(iv);
+        fastbit.finishOrder(orderUuid).catch(() => {});
+
+        await bot.telegram.sendMessage(
+          uid,
+          `<blockquote>🔑 <b>OTP MASUK!</b>
+━━━━━━━━━━━━━━━━
+📱 Nomor: <code>${phone}</code>
+⚡ Metode: <b>📩 SMS Biasa</b>
+🔑 Kode: <code>${otpCode}</code>
+━━━━━━━━━━━━━━━━</blockquote>`,
+          {
+            parse_mode: "HTML",
+            reply_markup: {
+              inline_keyboard: [
+                [copyOtpButton(otpCode)],
+                [{ text: "✅ Pesanan Berhasil", callback_data: `order_done_${uid}_${sess.trxId || orderUuid}` }],
+                ...(sess.trxId ? [[{ text: "🛒 Order Lagi", callback_data: `order_again_${uid}_${sess.trxId}` }]] : []),
+              ],
+            },
+          }
+        );
+
+        sendChannelRealtimeOtpNotification({
+          serviceName: sess.serviceName,
+          phone,
+          otp: otpCode,
+          trxId: sess.trxId || orderUuid,
+        }).catch(() => {});
+
+        const userObj = db.getUser(uid);
+        sendChannelOrderReportNotification({
+          type: "SMS",
+          username: userObj?.username || "",
+          userId: uid,
+          serviceName: sess.serviceName,
+          phone,
+          harga: sess.hargaUser,
+          modal: sess.hargaDasar,
+          otp: otpCode,
+          serverName: "Server 1 (SMS)",
+        }).catch(() => {});
+
+        delete sessions[uid];
+        checkResellerPromotion(bot, uid).catch(() => {});
+        return;
+      }
+
+      const status = String(order.status || "").toLowerCase();
+      if (["canceled", "cancelled", "cancel", "failed", "expired"].includes(status)) {
+        clearInterval(iv);
+        found = true;
+        refundFastbitOrder(uid, sess);
+        await bot.telegram.sendMessage(
+          uid,
+          `<blockquote>⚠️ Order ${escapeHTML(order.status)}.
+Coin dikembalikan.
+🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
+          { parse_mode: "HTML" }
+        ).catch(() => {});
+        delete sessions[uid];
+      }
+    } catch (error) {
+      console.error("FastBit poll error:", error.message);
+    }
+  }, 8_000);
 }
 
 async function showHeroServices(ctx, uid, editMsgId = null) {
   const sess = sessions[uid];
+  const isServer2 = sess?.smsServer === 2 || sess?.verificationType === "flashcall";
+  const serverLabel = isServer2 ? "SERVER 2⃣ (FLASHCALL + SMS)" : "SERVER 1⃣ (SMS)";
+  const searchProviderKey = isServer2 ? "rumahotp" : "herosms";
   const services = sess?.filteredServices || sess?.heroServices || [];
   const totalPage = Math.max(1, Math.ceil(services.length / 30));
   const page = Math.min(Math.max(sess.servicePage || 1, 1), totalPage);
@@ -2884,21 +3411,21 @@ async function showHeroServices(ctx, uid, editMsgId = null) {
 
   if (sess?.filteredServices) {
     buttons.push([
-      Markup.button.callback("🔍 Cari Lagi", `search_sms_svc_herosms_${uid}`),
-      Markup.button.callback("❌ Reset Pencarian", `reset_sms_svc_herosms_${uid}`),
+      Markup.button.callback("🔍 Cari Lagi", `search_sms_svc_${searchProviderKey}_${uid}`),
+      Markup.button.callback("❌ Reset Pencarian", `reset_sms_svc_${searchProviderKey}_${uid}`),
     ]);
   } else {
     buttons.push([
-      Markup.button.callback("🔍 Cari Layanan", `search_sms_svc_herosms_${uid}`),
+      Markup.button.callback("🔍 Cari Layanan", `search_sms_svc_${searchProviderKey}_${uid}`),
     ]);
   }
 
   const teks = sess?.filteredServices
-    ? `<blockquote>🔧 <b>SERVER 1⃣ — HASIL PENCARIAN</b>
+    ? `<blockquote>🔧 <b>${serverLabel} — HASIL PENCARIAN</b>
 🔍 Kata kunci: <b>${escapeHTML(sess.searchQuery || "")}</b> (${services.length} layanan)
 ━━━━━━━━━━━━━━━━
 Hal ${page}/${totalPage}</blockquote>`
-    : `<blockquote>🔧 <b>SERVER 1⃣ — PILIH LAYANAN</b>
+    : `<blockquote>🔧 <b>${serverLabel} — PILIH LAYANAN</b>
 ━━━━━━━━━━━━━━━━
 Pilih aplikasi untuk melanjutkan:
 Hal ${page}/${totalPage}</blockquote>`;
@@ -2965,6 +3492,9 @@ bot.action(/^hs_svc_([A-Za-z0-9_-]+)_(\d+)$/, async (ctx) => {
 
 async function showHeroCountries(ctx, uid, editMsgId = null) {
   const sess = sessions[uid];
+  const isServer2 = sess?.smsServer === 2 || sess?.verificationType === "flashcall";
+  const serverLabel = isServer2 ? "SERVER 2⃣ (FLASHCALL + SMS)" : "SERVER 1⃣ (SMS)";
+  const providerKey = isServer2 ? "rumahotp" : "herosms";
   const countries = sess?.heroCountries || [];
   const totalPage = Math.max(1, Math.ceil(countries.length / LIST_PAGE_SIZE));
   const page = Math.min(Math.max(sess.countryPage || 1, 1), totalPage);
@@ -2973,7 +3503,7 @@ async function showHeroCountries(ctx, uid, editMsgId = null) {
   const pageItems = countries.slice(start, start + LIST_PAGE_SIZE);
   const buttons = twoColumnButtons(pageItems, (country) => {
     const baseIdr = country.priceIdr;
-    const retailPrice = db.calculatePrice("herosms", baseIdr, sess.serviceId, uid);
+    const retailPrice = db.calculatePrice(providerKey, baseIdr, sess.serviceId, uid);
     const stock = country.stock ? ` (${formatStock(country.stock)})` : "";
     return Markup.button.callback(
       `🌍 ${shortButtonText(country.name, 12)} · ${rupiah(retailPrice)}${stock}`,
@@ -2989,7 +3519,7 @@ async function showHeroCountries(ctx, uid, editMsgId = null) {
     `back_hs_service_${uid}`
   );
 
-  const teks = `<blockquote>🌍 <b>SERVER 1⃣ — PILIH NEGARA</b>
+  const teks = `<blockquote>🌍 <b>${serverLabel} — PILIH NEGARA</b>
 🔧 Layanan: <b>${escapeHTML(sess.serviceName || "")}</b>
 ━━━━━━━━━━━━━━━━
 Pilih negara yang tersedia:
@@ -3059,6 +3589,8 @@ bot.action(/^hs_country_(\d+)_(\d+)$/, async (ctx) => {
 
 async function showHeroOperators(ctx, uid, editMsgId = null) {
   const sess = sessions[uid];
+  const isServer2 = sess?.smsServer === 2 || sess?.verificationType === "flashcall";
+  const serverLabel = isServer2 ? "SERVER 2⃣ (FLASHCALL + SMS)" : "SERVER 1⃣ (SMS)";
   const operators = sess?.heroOperators || [];
   const totalPage = Math.max(1, Math.ceil(operators.length / LIST_PAGE_SIZE));
   const page = Math.min(Math.max(sess.operatorPage || 1, 1), totalPage);
@@ -3080,7 +3612,7 @@ async function showHeroOperators(ctx, uid, editMsgId = null) {
     `back_hs_country_${uid}`
   );
 
-  const teks = `<blockquote>📡 <b>SERVER 1⃣ — PILIH OPERATOR</b>
+  const teks = `<blockquote>📡 <b>${serverLabel} — PILIH OPERATOR</b>
 🔧 Layanan: <b>${escapeHTML(sess.serviceName)}</b>
 🌍 Negara: <b>${escapeHTML(sess.countryName)}</b>
 ━━━━━━━━━━━━━━━━
@@ -3138,8 +3670,10 @@ bot.action(/^hs_op_(\d+)_(\d+)$/, async (ctx) => {
 async function showHeroConfirmation(ctx, uid) {
   const sess = sessions[uid];
   if (!sess) return;
+  const isServer2 = sess.smsServer === 2 || sess.verificationType === "flashcall";
+  const providerKey = isServer2 ? "rumahotp" : "herosms";
   const pDetails = db.getResellerPriceDetails(
-    "herosms",
+    providerKey,
     sess.hargaDasar ?? herosms.toIdrPrice(sess.hargaAsli),
     sess.serviceId,
     uid
@@ -3175,9 +3709,10 @@ Deposit coin dulu:</blockquote>`,
   }
 
   const msg = await ctx.replyWithHTML(
-`<blockquote>📱 <b>KONFIRMASI ORDER</b>
+`<blockquote>📱 <b>KONFIRMASI ORDER — ${isServer2 ? "FLASHCALL + SMS" : "SMS"}</b>
 ━━━━━━━━━━━━━━━━
 🔧 Layanan: <b>${escapeHTML(sess.serviceName)}</b>
+⚡ Metode: <b>${isServer2 ? "FlashCall + SMS (Panggilan / SMS)" : "SMS Biasa"}</b>
 🌍 Negara: <b>${escapeHTML(sess.countryName)}</b>
 📡 Operator: <b>${escapeHTML(sess.operatorName || "Semua Operator")}</b>
 💰 Harga: ${priceDisplay}
@@ -3193,7 +3728,7 @@ Coin akan langsung dipotong setelah konfirmasi.</blockquote>`,
 }
 
 // ── Search Handlers for SMS Services (Server 1 & Server 2) ─────
-bot.action(/^search_sms_svc_(herosms|rumahotp)_(\d+)$/, async (ctx) => {
+bot.action(/^search_sms_svc_(fastbit|herosms|rumahotp)_(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   const server = ctx.match[1];
   const uid = parseInt(ctx.match[2]);
@@ -3215,7 +3750,7 @@ Ketik nama aplikasi/layanan yang ingin kamu cari:
   );
 });
 
-bot.action(/^reset_sms_svc_(herosms|rumahotp)_(\d+)$/, async (ctx) => {
+bot.action(/^reset_sms_svc_(fastbit|herosms|rumahotp)_(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery("Memuat ulang layanan...");
   const server = ctx.match[1];
   const uid = parseInt(ctx.match[2]);
@@ -3226,16 +3761,16 @@ bot.action(/^reset_sms_svc_(herosms|rumahotp)_(\d+)$/, async (ctx) => {
   delete sess.filteredServices;
   delete sess.searchQuery;
   sess.servicePage = 1;
-  sess.step = server === "herosms" ? "hs_pilih_service" : "ro_pilih_service";
-
-  if (server === "herosms") {
-    await showHeroServices(ctx, uid, ctx.callbackQuery?.message?.message_id);
+  if (server === "fastbit") {
+    sess.step = "fb_pilih_service";
+    await showFastbitServices(ctx, uid, ctx.callbackQuery?.message?.message_id);
   } else {
-    await showRumahOtpServices(ctx, uid, ctx.callbackQuery?.message?.message_id);
+    sess.step = "hs_pilih_service";
+    await showHeroServices(ctx, uid, ctx.callbackQuery?.message?.message_id);
   }
 });
 
-bot.action(/^cancel_sms_search_(herosms|rumahotp)_(\d+)$/, async (ctx) => {
+bot.action(/^cancel_sms_search_(fastbit|herosms|rumahotp)_(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.deleteMessage().catch(() => {});
   const server = ctx.match[1];
@@ -3244,11 +3779,12 @@ bot.action(/^cancel_sms_search_(herosms|rumahotp)_(\d+)$/, async (ctx) => {
   const sess = sessions[uid];
   if (!sess) return;
 
-  sess.step = server === "herosms" ? "hs_pilih_service" : "ro_pilih_service";
-  if (server === "herosms") {
-    await showHeroServices(ctx, uid);
+  if (server === "fastbit") {
+    sess.step = "fb_pilih_service";
+    await showFastbitServices(ctx, uid);
   } else {
-    await showRumahOtpServices(ctx, uid);
+    sess.step = "hs_pilih_service";
+    await showHeroServices(ctx, uid);
   }
 });
 
@@ -4057,6 +4593,159 @@ OTP akan otomatis dikirim ke sini!
   pollOtpcepat(uid, orderId, phone, sess);
 });
 
+// ── Beli Server 1 (SMS) pakai coin ────────────────────────
+bot.action(/^fb_buy_(\d+)$/, async (ctx) => {
+  await ctx.answerCbQuery("⏳ Memproses...");
+  await ctx.deleteMessage().catch(() => {});
+
+  const uid = parseInt(ctx.match[1]);
+  if (uid !== ctx.from.id) return;
+  const sess = sessions[uid];
+  if (!sess || sess.server !== "fastbit" || sess.step !== "fb_konfirmasi") return ctx.reply("❌ Sesi habis.");
+
+  if (sess.processing) {
+    return ctx.answerCbQuery("⏳ Sedang diproses, tunggu...", { show_alert: true });
+  }
+  sess.processing = true;
+
+  const coinCek = db.getCoin(uid);
+  if (coinCek < sess.hargaUser) {
+    const kurang = sess.hargaUser - coinCek;
+    const msg = await ctx.replyWithHTML(
+`<blockquote>❌ <b>COIN TIDAK CUKUP</b>
+━━━━━━━━━━━━━━━━
+💰 Harga: <b>${rupiah(sess.hargaUser)}</b>
+🪙 Coin mu: <b>${rupiah(coinCek)}</b>
+⚠️ Kurang: <b>${rupiah(kurang)}</b>
+━━━━━━━━━━━━━━━━
+Top up dulu!</blockquote>`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("💵 Rp5.000", `dep_5000_${uid}`),
+         Markup.button.callback("💵 Rp10.000", `dep_10000_${uid}`)],
+        [Markup.button.callback("💵 Rp20.000", `dep_20000_${uid}`),
+         Markup.button.callback("💵 Rp50.000", `dep_50000_${uid}`)],
+        [Markup.button.callback("💵 Rp100.000", `dep_100000_${uid}`)],
+      ])
+    );
+    setTimeout(() => bot.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(() => {}), 60_000);
+    sess.processing = false;
+    return;
+  }
+
+  const result = db.deductCoin(uid, sess.hargaUser);
+  if (result === false) {
+    const msg = await ctx.replyWithHTML("<blockquote>❌ <b>COIN TIDAK CUKUP</b>\nTop up dulu!</blockquote>");
+    setTimeout(() => bot.telegram.deleteMessage(ctx.chat.id, msg.message_id).catch(() => {}), 60_000);
+    delete sessions[uid];
+    return;
+  }
+  sess.step = "fb_processing";
+
+  const loadMsg = await ctx.replyWithHTML("<blockquote>⏳ <b>Memproses order...</b></blockquote>");
+
+  let order;
+  try {
+    order = await fastbit.createOrder({
+      serviceId: sess.otpServiceId || sess.serviceId,
+      countryId: sess.countryId,
+    });
+  } catch (error) {
+    db.addCoin(uid, sess.hargaUser);
+    console.error("FastBit createOrder error:", error.message);
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      loadMsg.message_id,
+      null,
+      `<blockquote>❌ Gagal order stok provider sedang habis. Coin dikembalikan.\n💬 Hubungi: ${config.urladmin}</blockquote>`,
+      { parse_mode: "HTML" }
+    );
+    delete sessions[uid];
+    return;
+  }
+
+  if (!order?.order_id || !order.phone_number) {
+    const reason = fastbit.getLastError() || "Gagal order nomor. Stok sedang tidak tersedia.";
+    db.addCoin(uid, sess.hargaUser);
+    console.error("FastBit createOrder rejected:", reason);
+    await ctx.telegram.editMessageText(
+      ctx.chat.id,
+      loadMsg.message_id,
+      null,
+      `<blockquote>❌ Gagal order. Coin dikembalikan.\n💬 ${escapeHTML(reason)}</blockquote>`,
+      { parse_mode: "HTML" }
+    ).catch(() => {});
+    delete sessions[uid];
+    return;
+  }
+
+  const orderId = order.order_id;
+  const phone = order.phone_number;
+  const expiry = "20 menit";
+  let trxId = null;
+
+  try {
+    trxId = db.addTransaction({
+      userId: uid,
+      username: ctx.from.username || ctx.from.first_name,
+      orderId,
+      phone,
+      productName: sess.serviceName,
+      negara: sess.countryName,
+      harga: sess.hargaUser,
+      provider: "fastbit",
+      serviceId: sess.serviceId,
+      countryId: sess.countryId,
+      operatorId: sess.otpServiceId,
+      providerPrice: sess.hargaDasar,
+    });
+  } catch (error) {
+    console.error("FastBit transaction save error:", error.message);
+  }
+
+  sess.server = "fastbit";
+  sess.orderId = orderId;
+  sess.orderUuid = orderId;
+  sess.phone = phone;
+  sess.step = "tunggu_otp";
+  sess.cancelAt = Date.now() + 3 * 60 * 1000;
+  sess.orderMsgId = loadMsg.message_id;
+  sess.trxId = trxId;
+  sess.testimoniData = {
+    username: ctx.from.username || ctx.from.first_name,
+    phone,
+    negara: sess.countryName,
+    harga: sess.hargaUser,
+    trxId,
+  };
+
+  const successText =
+`<blockquote>✅ <b>ORDER BERHASIL! (SERVER 1 — SMS)</b>
+━━━━━━━━━━━━━━━━
+🔧 Layanan: <b>${escapeHTML(sess.serviceName)}</b>
+⚡ Metode: <b>📩 SMS Biasa</b>
+🌍 Negara: <b>${escapeHTML(sess.countryName)}</b>
+📡 Operator: <b>${escapeHTML(sess.operatorName || "Semua Operator")}</b>
+📱 <b>Nomor: <code>${phone}</code></b>
+💰 Harga: <b>${rupiah(sess.hargaUser)}</b>
+🪙 Sisa coin: <b>${rupiah(result)}</b>
+🧾 TRX ID: <code>${trxId || "tidak tersedia"}</code>
+⏰ Expires: <i>${expiry}</i>
+━━━━━━━━━━━━━━━━
+⏳ Gunakan nomor ini untuk verifikasi.
+OTP akan otomatis dikirim ke sini!
+
+⚠️ Tombol batalkan aktif setelah 3 menit.</blockquote>`;
+
+  sess.orderMsgId = await updateOrderMessage(ctx, loadMsg, successText, {
+    parse_mode: "HTML",
+    reply_markup: Markup.inlineKeyboard([
+      [copyPhoneButton(phone)],
+      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}`)],
+    ]).reply_markup,
+  });
+  pollFastbit(uid, orderId, phone, sess);
+});
+
 // ── Beli server 2 pakai coin ──────────────────────────────
 bot.action(/^hs_buy_(\d+)$/, async (ctx) => {
   await ctx.answerCbQuery("⏳ Memproses...");
@@ -4107,6 +4796,9 @@ Top up dulu!</blockquote>`,
 
   const loadMsg = await ctx.replyWithHTML("<blockquote>⏳ <b>Memproses order...</b></blockquote>");
 
+  const isFlashcall = sess.smsServer === 2 || sess.verificationType === "flashcall";
+  const providerKey = isFlashcall ? "rumahotp" : "herosms";
+
   let order;
   try {
     order = await herosms.createOrder({
@@ -4115,10 +4807,12 @@ Top up dulu!</blockquote>`,
       operatorId: sess.operatorId,
       maxPrice: sess.hargaAsli,
       reference: `HS-${uid}-${Date.now()}`,
+      verification: isFlashcall,
+      verificationType: isFlashcall ? "flashcall" : "sms",
     });
   } catch (error) {
     db.addCoin(uid, sess.hargaUser);
-    console.error("Server 2 createOrder error:", error.message);
+    console.error("HeroSMS createOrder error:", error.message);
     await ctx.telegram.editMessageText(
       ctx.chat.id,
       loadMsg.message_id,
@@ -4131,9 +4825,9 @@ Top up dulu!</blockquote>`,
   }
 
   if (!order?.order_id || !order.phone_number) {
-    const reason = herosms.getLastError() || "Hero SMS tidak mengembalikan data order.";
+    const reason = herosms.getLastError() || "Penyedia tidak mengembalikan data order.";
     db.addCoin(uid, sess.hargaUser);
-    console.error("Server 2 createOrder rejected:", reason);
+    console.error("HeroSMS createOrder rejected:", reason);
     await ctx.telegram.editMessageText(
       ctx.chat.id,
       loadMsg.message_id,
@@ -4162,14 +4856,14 @@ Top up dulu!</blockquote>`,
       productName: sess.serviceName,
       negara: sess.countryName,
       harga: sess.hargaUser,
-      provider: "herosms",
+      provider: providerKey,
       serviceId: sess.serviceId,
       countryId: sess.countryId,
       operatorId: sess.operatorId,
       providerPrice: sess.hargaAsli,
     });
   } catch (error) {
-    console.error("Server 2 transaction save error:", error.message);
+    console.error("HeroSMS transaction save error:", error.message);
   }
 
   sess.server = "herosms";
@@ -4189,11 +4883,19 @@ Top up dulu!</blockquote>`,
     trxId,
   };
 
+  const title = isFlashcall ? "ORDER BERHASIL! (FLASHCALL + SMS)" : "ORDER BERHASIL! (SMS)";
+  const methodText = isFlashcall
+    ? "⚡ Metode: <b>📞 FlashCall / 📩 SMS</b>\n"
+    : "⚡ Metode: <b>📩 SMS Biasa</b>\n";
+  const instructText = isFlashcall
+    ? "⏳ Gunakan nomor ini untuk verifikasi.\nKode bisa masuk via Panggilan Telepon (FlashCall) atau SMS!"
+    : "⏳ Gunakan nomor ini untuk verifikasi.\nOTP akan otomatis dikirim ke sini!";
+
   const successText =
-`<blockquote>✅ <b>ORDER BERHASIL!</b>
+`<blockquote>✅ <b>${title}</b>
 ━━━━━━━━━━━━━━━━
 🔧 Layanan: <b>${escapeHTML(sess.serviceName)}</b>
-🌍 Negara: <b>${escapeHTML(sess.countryName)}</b>
+${methodText}🌍 Negara: <b>${escapeHTML(sess.countryName)}</b>
 📡 Operator: <b>${escapeHTML(sess.operatorName)}</b>
 📱 <b>Nomor: <code>${phone}</code></b>
 💰 Harga: <b>${rupiah(sess.hargaUser)}</b>
@@ -4201,8 +4903,7 @@ Top up dulu!</blockquote>`,
 🧾 TRX ID: <code>${trxId || "tidak tersedia"}</code>
 ⏰ Expires: <i>${expiry}</i>
 ━━━━━━━━━━━━━━━━
-⏳ Gunakan nomor ini untuk verifikasi.
-OTP akan otomatis dikirim ke sini!
+${instructText}
 
 ⚠️ Tombol batalkan aktif setelah 3 menit.</blockquote>`;
   sess.orderMsgId = await updateOrderMessage(ctx, loadMsg, successText, {
@@ -4272,7 +4973,7 @@ bot.action(/^ro_buy_(\d+)$/, async (ctx) => {
   }
 
   if (!order?.order_id || !order.phone) {
-    const reason = rumahotp.getLastError() || "RumahOTP tidak mengembalikan data order.";
+    const reason = rumahotp.getLastError() || "Penyedia tidak mengembalikan data order.";
     db.addCoin(uid, sess.hargaUser);
     console.error("Server 2 (RumahOTP) buyNumber rejected:", reason);
     await ctx.telegram.editMessageText(
@@ -4664,50 +5365,18 @@ Coin dikembalikan setelah pembatalan provider dikonfirmasi.</blockquote>`,
               ],
             },
           }
-        );
-        checkResellerPromotion(bot, uid).catch(() => {});
-        return;
-      }
-
-      if (state === "paid") {
-        stopWahubPoll(pollKey);
-        saveWahubStatus(uid, latest, "paid", {
-          step: "selesai",
-          providerStatus: state,
-          paidAt: latest.paidAt || new Date().toISOString(),
-          hasReceivedOtp: true,
-          otpReceived: true,
-        });
-
-        await bot.telegram.sendMessage(
-          uid,
-          `<blockquote>✅ <b>ORDER SUDAH PAID</b>
-WAHUB sudah menerima OTP. Pembatalan dan pengembalian coin tidak tersedia.</blockquote>`,
-          {
-            parse_mode: "HTML",
-            reply_markup: {
-              inline_keyboard: [
-                [{ text: "✅ Pesanan Berhasil", callback_data: `order_done_${uid}_${latest.sessionKey || latest.trxId}` }],
-                ...(latest.trxId ? [[{ text: "🛒 Order Lagi", callback_data: `order_again_${uid}_${latest.trxId}` }]] : []),
-                ...(wahubRetryCount(latest) < 3
-                  ? [[{ text: `🔁 Minta Ulang OTP (${wahubRetryCount(latest)}/3)`, callback_data: `wahub_retry_${uid}_${latest.sessionKey || latest.trxId}` }]]
-                  : []),
-              ],
-            },
-          }
         ).catch(() => {});
         checkResellerPromotion(bot, uid).catch(() => {});
         return;
       }
+
       if (["failed", "error", "cancelled", "canceled", "expired"].includes(state)) {
         stopWahubPoll(pollKey);
-        if (latest.hasReceivedOtp || isWahubPaidSession(latest)) {
+        if (isWahubPaidSession(latest)) {
           saveWahubStatus(uid, latest, "paid", {
             step: "selesai",
             providerStatus: state,
             finishedAt: new Date().toISOString(),
-            hasReceivedOtp: true,
-            otpReceived: true,
           });
           return;
         }
@@ -4719,7 +5388,7 @@ WAHUB sudah menerima OTP. Pembatalan dan pengembalian coin tidak tersedia.</bloc
         await bot.telegram.sendMessage(
           uid,
           `<blockquote>⚠️ <b>Order gagal.</b>
-${refund.refunded || refund.alreadyRefunded ? "Coin dikembalikan." : "Coin tidak dikembalikan karena order tidak lagi waiting."}
+${refund.refunded || refund.alreadyRefunded ? "Coin dikembalikan 100%." : "Coin tidak dikembalikan."}
 🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
           { parse_mode: "HTML" }
         ).catch(() => {});
@@ -4736,7 +5405,7 @@ ${refund.refunded || refund.alreadyRefunded ? "Coin dikembalikan." : "Coin tidak
   wahubPollers.set(pollKey, interval);
 }
 
-// ── Ganti Nomor (Batalkan nomor lama, refund, pesan nomor baru untuk layanan sama) ──
+// ── Ganti Nomor (Batalkan nomor lama di provider, pesan nomor baru untuk layanan sama tanpa potong saldo lagi) ──
 bot.action(/^wahub_change_num_(\d+)(?:_(.+))?$/, async (ctx) => {
   const uid = parseInt(ctx.match[1]);
   const sessionKey = ctx.match[2] || null;
@@ -4747,7 +5416,7 @@ bot.action(/^wahub_change_num_(\d+)(?:_(.+))?$/, async (ctx) => {
   if (!sess) {
     return ctx.answerCbQuery("❌ Order tidak ditemukan atau sudah selesai.", { show_alert: true });
   }
-  if (isWahubPaidSession(sess) || sess.hasReceivedOtp || sess.otpReceived || sess.firstOtp || sess.paidAt) {
+  if (isWahubPaidSession(sess)) {
     return ctx.answerCbQuery(
       "❌ Ganti nomor ditolak. OTP sudah diterima dan coin tidak dapat dikembalikan.",
       { show_alert: true }
@@ -4771,7 +5440,7 @@ bot.action(/^wahub_change_num_(\d+)(?:_(.+))?$/, async (ctx) => {
 
   try {
     const current = getWahubSession(uid, sessionKey || sess.sessionKey) || sess;
-    if (isWahubPaidSession(current) || current.hasReceivedOtp || current.otpReceived || current.firstOtp || current.paidAt) {
+    if (isWahubPaidSession(current)) {
       stopWahubPoll(`${String(uid)}:${oldSessionKey}`);
       return ctx.answerCbQuery(
         "❌ Ganti nomor ditolak. OTP sudah diterima dan coin tidak dapat dikembalikan.",
@@ -4784,51 +5453,36 @@ bot.action(/^wahub_change_num_(\d+)(?:_(.+))?$/, async (ctx) => {
     if (!cancelResult.confirmed) {
       return ctx.answerCbQuery("❌ Pembatalan nomor lama belum dikonfirmasi provider. Coba lagi.", { show_alert: true });
     }
-
-    // 2. Refund nomor lama
-    const refund = refundWahubOrder(uid, sess);
     stopWahubPoll(`${String(uid)}:${oldSessionKey}`);
-    saveWahubStatus(uid, sess, "cancelled", {
-      step: "selesai",
-      providerStatus: "cancelled",
-      cancelledAt: new Date().toISOString(),
-      cancelResponse: cancelResult.response,
-    });
 
-    // 3. Cek saldo koin pengguna
-    const coin = db.getCoin(uid);
-    if (coin < price) {
-      const noCoinText = `<blockquote>🚫 <b>NOMOR LAMA DIBATALKAN</b>
-━━━━━━━━━━━━━━━━
-Nomor lama berhasil dibatalkan dan koin telah di-refund 100%.
-⚠️ <b>Koin tidak cukup untuk mengambil nomor pengganti:</b>
-💰 Harga: <b>${rupiah(price)}</b> | 🪙 Coin kamu: <b>${rupiah(coin)}</b></blockquote>`;
-      return ctx.editMessageText(noCoinText, { parse_mode: "HTML" }).catch(() => ctx.replyWithHTML(noCoinText));
-    }
-
-    const deducted = db.deductCoin(uid, price);
-    if (deducted === false) {
-      return ctx.reply("❌ Gagal memotong saldo untuk nomor baru. Saldo kamu tetap aman.");
-    }
-
-    // 4. Sewa nomor baru dari provider yang sama
-    let newOrder;
+    // 2. Sewa nomor baru dari provider yang sama (saldo user TIDAK dipotong lagi karena sudah bayar untuk order ini)
+    let newOrder = null;
     let orderError = "";
-    if (provider === "engineunicorn") {
-      newOrder = await engineunicorn.rent(serviceId);
-      if (!newOrder?.order_id || !newOrder.phone) {
-        orderError = engineunicorn.getLastError() || "Stok nomor Server 2 habis.";
+    try {
+      if (provider === "engineunicorn") {
+        newOrder = await engineunicorn.rent(serviceId);
+        if (!newOrder?.order_id || !newOrder.phone) {
+          orderError = engineunicorn.getLastError() || "Stok nomor Server 2 habis.";
+        }
+      } else {
+        newOrder = await wahub.rent(serviceId);
+        if (!newOrder?.order_id || !newOrder.phone) {
+          orderError = wahub.getLastError() || "Stok nomor Server 1 habis.";
+        }
       }
-    } else {
-      newOrder = await wahub.rent(serviceId);
-      if (!newOrder?.order_id || !newOrder.token || !newOrder.phone) {
-        orderError = wahub.getLastError() || "Stok nomor Server 1 habis.";
-      }
+    } catch (err) {
+      orderError = err.message;
     }
 
     if (!newOrder?.phone || !newOrder?.order_id) {
-      // Kembalikan koin karena sewa nomor baru gagal
-      db.addCoin(uid, price);
+      // Gagal sewa nomor baru pengganti -> refund saldo order lama 100%
+      const refund = refundWahubOrder(uid, sess);
+      saveWahubStatus(uid, sess, "cancelled", {
+        step: "selesai",
+        providerStatus: "cancelled",
+        cancelledAt: new Date().toISOString(),
+        cancelResponse: cancelResult.response,
+      });
       const failedText = `<blockquote>🚫 <b>NOMOR LAMA DIBATALKAN</b>
 ━━━━━━━━━━━━━━━━
 Nomor lama berhasil dibatalkan dan koin telah di-refund 100%.
@@ -4839,48 +5493,36 @@ Silakan pilih layanan lain atau coba lagi nanti.</blockquote>`;
       return ctx.editMessageText(failedText, { parse_mode: "HTML" }).catch(() => ctx.replyWithHTML(failedText));
     }
 
-    // 5. Catat transaksi baru
-    const newTrxId = db.addTransaction({
-      userId: uid,
-      username: ctx.from.username || ctx.from.first_name,
-      orderId: newOrder.order_id,
-      phone: newOrder.phone,
-      productName: serviceName,
-      negara: "Indonesia",
-      harga: price,
-      provider: provider,
-      serviceId: serviceId,
-      providerPrice: providerPrice,
-    });
+    // 3. Sewa nomor baru sukses -> Update info transaksi & sesi (Saldo user TIDAK dipotong lagi!)
+    const trx = db.getTrxById(sess.trxId);
+    if (trx) {
+      trx.phone = newOrder.phone;
+      trx.orderId = newOrder.order_id;
+      if (providerPrice) trx.providerPrice = providerPrice;
+      db.save(db.load());
+    }
 
     const expiryMs = wahubExpiryMs(newOrder.expires_at);
-    const newActive = {
-      step: "tunggu_otp",
-      status: "waiting",
-      providerStatus: "waiting",
-      provider: provider,
-      createdAt: new Date().toISOString(),
-      serviceId: serviceId,
-      serviceName: serviceName,
-      hargaUser: price,
-      orderId: newOrder.order_id,
-      token: newOrder.token || newOrder.order_id,
-      phone: newOrder.phone,
-      expiresAt: expiryMs,
-      cancelAt: 0,
-      retryCount: 0,
-      trxId: newTrxId,
-      sessionKey: newTrxId,
-      orderMsgId: ctx.callbackQuery?.message?.message_id || sess.orderMsgId,
-      testimoniData: {
-        username: ctx.from.username || ctx.from.first_name,
-        phone: newOrder.phone,
-        negara: serviceName,
-        harga: price,
-        trxId: newTrxId,
-      },
-    };
-    wahubSessionDb.set(uid, newActive);
+    sess.orderId = newOrder.order_id;
+    sess.token = newOrder.token || newOrder.order_id;
+    sess.phone = newOrder.phone;
+    sess.expiresAt = expiryMs;
+    sess.cancelAt = 0;
+    sess.retryCount = 0;
+    sess.step = "tunggu_otp";
+    sess.status = "waiting";
+    sess.providerStatus = "waiting";
+    sess.lastOtp = "";
+    sess.firstOtp = "";
+    sess.hasReceivedOtp = false;
+    sess.otpReceived = false;
+    sess.paidAt = null;
+    sess.changeNumProcessing = false;
+    sess.updatedAt = new Date().toISOString();
+    if (sess.testimoniData) {
+      sess.testimoniData.phone = newOrder.phone;
+    }
+    wahubSessionDb.set(uid, sess);
 
     const expiryText = new Date(expiryMs).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
     const successText = `<blockquote>🔄 <b>NOMOR BERHASIL DIGANTI!</b>
@@ -4889,25 +5531,25 @@ Silakan pilih layanan lain atau coba lagi nanti.</blockquote>`;
 📱 Nomor Baru: <code>${escapeHTML(newOrder.phone)}</code>
 💰 Harga: <b>${rupiah(price)}</b>
 🪙 Sisa coin: <b>${rupiah(db.getCoin(uid))}</b>
-🧾 TRX ID: <code>${newTrxId}</code>
+🧾 TRX ID: <code>${sess.trxId}</code>
 ⏰ Berakhir: <i>${expiryText}</i>
 ━━━━━━━━━━━━━━━━
 ⏳ Menunggu OTP masuk ke nomor baru...
 
-💡 Kamu bisa batalkan order kapan saja jika OTP tidak masuk (Saldo di-refund 100%).</blockquote>`;
+💡 Saldo kamu tidak dipotong lagi. Jika OTP tidak masuk, kamu bisa batalkan order kapan saja (Saldo di-refund 100%).</blockquote>`;
 
     await ctx.editMessageText(successText, {
       parse_mode: "HTML",
       reply_markup: {
         inline_keyboard: [
-          [{ text: "🔁 Minta Ulang OTP (0/3)", callback_data: `wahub_retry_${uid}_${newTrxId}` }],
-          [{ text: "🔄 Ganti Nomor", callback_data: `wahub_change_num_${uid}_${newTrxId}` }],
-          [{ text: "🚫 Batalkan Order", callback_data: `wahub_cancel_${uid}_${newTrxId}` }],
+          [{ text: "🔁 Minta Ulang OTP (0/3)", callback_data: `wahub_retry_${uid}_${sess.sessionKey || sess.trxId}` }],
+          [{ text: "🔄 Ganti Nomor", callback_data: `wahub_change_num_${uid}_${sess.sessionKey || sess.trxId}` }],
+          [{ text: "🚫 Batalkan Order", callback_data: `wahub_cancel_${uid}_${sess.sessionKey || sess.trxId}` }],
         ],
       },
     }).catch(() => ctx.replyWithHTML(successText));
 
-    pollWahub(uid, newTrxId);
+    pollWahub(uid, sess.sessionKey || sess.trxId);
   } finally {
     const latest = getWahubSession(uid, sessionKey || sess.sessionKey) || sess;
     if (latest?.changeNumProcessing) {
@@ -4951,7 +5593,7 @@ bot.action(/^wahub_cancel_(\d+)(?:_(.+))?$/, async (ctx) => {
       return ctx.answerCbQuery("❌ Pembatalan belum dikonfirmasi provider.", { show_alert: true });
     }
     const latest = getWahubSession(uid, sessionKey || sess.sessionKey) || sess;
-    if (isWahubPaidSession(latest) || latest.hasReceivedOtp || latest.otpReceived || latest.firstOtp || latest.paidAt) {
+    if (isWahubPaidSession(latest)) {
       stopWahubPoll(`${String(uid)}:${sessionKey || sess.sessionKey || "legacy"}`);
       latest.cancelProcessing = false;
       wahubSessionDb.set(uid, latest);
@@ -4972,12 +5614,15 @@ bot.action(/^wahub_cancel_(\d+)(?:_(.+))?$/, async (ctx) => {
       cancelledAt: new Date().toISOString(),
       cancelResponse: cancelResult.response,
     });
+    const refundStatusText = refund.alreadyRefunded
+      ? "<i>(Sudah di-refund otomatis sebelumnya)</i>"
+      : `<b>${rupiah(refundAmount)}</b>`;
     const cancelText = `<blockquote>🚫 <b>ORDER DIBATALKAN</b>
 ━━━━━━━━━━━━━━━━
 📱 Layanan: <b>${escapeHTML(latest.serviceName || "-")}</b>
 📞 Nomor: <code>${escapeHTML(latest.phone || "-")}</code>
 🧾 TRX ID: <code>${escapeHTML(latest.trxId || "-")}</code>
-🪙 Coin dikembalikan: <b>${rupiah(refundAmount)}</b>
+🪙 Coin dikembalikan: ${refundStatusText}
 💰 Sisa coin: <b>${rupiah(db.getCoin(uid))}</b>
 ━━━━━━━━━━━━━━━━
 Order berhasil dibatalkan dan saldo telah di-refund 100%.</blockquote>`;
@@ -5007,7 +5652,7 @@ bot.action(/^wahub_cancel_all_(\d+)$/, async (ctx) => {
   let totalRefund = 0;
   let cancelCount = 0;
   for (const sess of activeOrders) {
-    if (isWahubPaidSession(sess) || sess.hasReceivedOtp || sess.otpReceived || sess.firstOtp || sess.paidAt) {
+    if (isWahubPaidSession(sess)) {
       saveWahubStatus(uid, sess, "paid", {
         step: "selesai",
         finishedAt: new Date().toISOString(),
@@ -5018,8 +5663,10 @@ bot.action(/^wahub_cancel_all_(\d+)$/, async (ctx) => {
     try {
       await cancelWahubOrder(sess.orderId, sess);
       const refund = refundWahubOrder(uid, sess);
-      if (refund.refunded || refund.alreadyRefunded) {
+      if (refund.refunded) {
         totalRefund += refund.amount || sess.hargaUser || 0;
+        cancelCount++;
+      } else if (refund.alreadyRefunded) {
         cancelCount++;
       }
       stopWahubPoll(`${String(uid)}:${sess.sessionKey || sess.trxId || "legacy"}`);
@@ -5278,12 +5925,20 @@ Coin dikembalikan.
       if (hasOtp) {
         found = true;
         clearInterval(iv);
+        const isFlashcall = sess.smsServer === 2 || sess.verificationType === "flashcall" || Boolean(order.is_call);
+        const otpTitle = order.is_call ? "📞 <b>FLASHCALL / PANGGILAN MASUK!</b>" : "🔑 <b>OTP MASUK!</b>";
+        const methodLine = order.is_call
+          ? "⚡ Metode: <b>📞 FlashCall (Panggilan)</b>\n"
+          : isFlashcall
+          ? "⚡ Metode: <b>📞 FlashCall + 📩 SMS</b>\n"
+          : "⚡ Metode: <b>📩 SMS</b>\n";
+
         await bot.telegram.sendMessage(
           uid,
-          `<blockquote>🔑 <b>OTP MASUK!</b>
+          `<blockquote>${otpTitle}
 ━━━━━━━━━━━━━━━━
 📱 Nomor: <code>${phone}</code>
-🔑 Kode: <code>${otpCode}</code>
+${methodLine}🔑 Kode: <code>${otpCode}</code>
 ━━━━━━━━━━━━━━━━</blockquote>`,
           {
             parse_mode: "HTML",
@@ -5304,6 +5959,7 @@ Coin dikembalikan.
         }).catch(() => {});
 
         const userObj = db.getUser(uid);
+        const serverReportName = isFlashcall ? "Server 2 (SMS - FlashCall + SMS)" : "Server 1 (SMS)";
         sendChannelOrderReportNotification({
           type: "SMS",
           username: userObj?.username || "",
@@ -5313,7 +5969,7 @@ Coin dikembalikan.
           harga: sess.hargaUser,
           modal: sess.hargaAsli || sess.providerPrice,
           otp: otpCode,
-          serverName: "Server 1 (SMS)",
+          serverName: serverReportName,
         }).catch(() => {});
         delete sessions[uid];
         checkResellerPromotion(bot, uid).catch(() => {});
@@ -5472,6 +6128,136 @@ Coin dikembalikan.
   }, 10_000);
 }
 
+// ── Polling Background untuk Order SMS API Dev (FastBit, HeroSMS, RumahOTP) ──
+const apiSmsPollers = new Map();
+
+function stopApiSmsPoll(pollKey) {
+  const timer = apiSmsPollers.get(String(pollKey));
+  if (timer) clearInterval(timer);
+  apiSmsPollers.delete(String(pollKey));
+}
+
+function pollApiSmsOrder(sess) {
+  if (!sess || !sess.orderId || !sess.provider) return;
+  const uid = sess.userId;
+  const pollKey = `${uid}:${sess.sessionKey || sess.trxId || sess.orderId}`;
+  stopApiSmsPoll(pollKey);
+
+  const iv = setInterval(async () => {
+    try {
+      const current = wahubSessionDb.find(uid, sess.sessionKey || sess.trxId || sess.orderId) || sess;
+      if (!current || ["paid", "completed", "cancelled", "expired", "failed"].includes(current.status)) {
+        stopApiSmsPoll(pollKey);
+        return;
+      }
+
+      // Cek timeout (20 menit)
+      if (Date.now() >= (current.expiresAt || 0)) {
+        stopApiSmsPoll(pollKey);
+        if (current.hasReceivedOtp || current.lastOtp) {
+          current.status = "completed";
+          current.providerStatus = "completed";
+          wahubSessionDb.set(uid, current);
+          return;
+        }
+        current.status = "cancelled";
+        current.providerStatus = "expired";
+        wahubSessionDb.set(uid, current);
+
+        if (current.provider === "fastbit") {
+          await cancelFastbitOrder(current.orderId || current.orderUuid).catch(() => {});
+        } else if (current.provider === "herosms" || current.provider === "rumahotp") {
+          await cancelHeroSmsOrder(current.orderId).catch(() => {});
+        }
+        if (current.trxId) {
+          db.refundTransaction(current.trxId, uid);
+        }
+        return;
+      }
+
+      let otpCode = null;
+      let orderData = null;
+
+      if (current.provider === "fastbit") {
+        orderData = await fastbit.getOrder(current.orderId || current.orderUuid);
+        if (orderData?.otp_code) {
+          otpCode = orderData.otp_code;
+          fastbit.finishOrder(current.orderId || current.orderUuid).catch(() => {});
+        }
+      } else if (current.provider === "herosms" || current.provider === "rumahotp") {
+        orderData = await herosms.getOrder(current.orderId);
+        if (orderData) {
+          otpCode = orderData.otp_code || extractOtp(orderData.otp_msg);
+        }
+      }
+
+      if (otpCode) {
+        stopApiSmsPoll(pollKey);
+        current.status = "completed";
+        current.providerStatus = "completed";
+        current.lastOtp = otpCode;
+        current.hasReceivedOtp = true;
+        current.otpReceived = true;
+        current.completedAt = new Date().toISOString();
+        wahubSessionDb.set(uid, current);
+
+        if (!current.notifiedRealtime) {
+          current.notifiedRealtime = true;
+          wahubSessionDb.set(uid, current);
+
+          sendChannelRealtimeOtpNotification({
+            serviceName: current.serviceName,
+            phone: current.phone,
+            otp: otpCode,
+            trxId: current.trxId || current.orderId,
+          }).catch(() => {});
+
+          const userObj = db.getUser(uid);
+          const username = userObj?.username || "API User";
+          const serverReportName = current.provider === "fastbit"
+            ? "Server 1 (SMS)"
+            : "Server 2 (SMS - FlashCall)";
+
+          sendChannelOrderReportNotification({
+            type: "SMS",
+            username,
+            userId: uid,
+            serviceName: current.serviceName,
+            phone: current.phone,
+            harga: current.hargaUser,
+            modal: current.providerPrice || current.hargaDasar || 0,
+            otp: otpCode,
+            serverName: serverReportName,
+          }).catch(() => {});
+        }
+
+        bot.telegram.sendMessage(
+          uid,
+          `<blockquote>🔑 <b>OTP MASUK! (API)</b>\n━━━━━━━━━━━━━━━━\n📱 Nomor: <code>${escapeHTML(current.phone)}</code>\n🔑 Kode: <code>${escapeHTML(otpCode)}</code>\n🧾 TRX ID: <code>${escapeHTML(current.trxId || "-")}</code>\n━━━━━━━━━━━━━━━━</blockquote>`,
+          { parse_mode: "HTML" }
+        ).catch(() => {});
+
+        return;
+      }
+
+      const statusStr = String(orderData?.status || "").toLowerCase();
+      if (["canceled", "cancelled", "cancel", "failed", "expired"].includes(statusStr)) {
+        stopApiSmsPoll(pollKey);
+        current.status = "cancelled";
+        current.providerStatus = statusStr;
+        wahubSessionDb.set(uid, current);
+        if (current.trxId) {
+          db.refundTransaction(current.trxId, uid);
+        }
+      }
+    } catch (pollErr) {
+      console.error("[API SMS POLL ERROR]", pollErr.message);
+    }
+  }, 6000);
+
+  apiSmsPollers.set(pollKey, iv);
+}
+
 // ── Full Pesan ────────────────────────────────────────────
 bot.action(/^order_again_(\d+)_(TRX-\d+)$/, async (ctx) => {
   const uid = parseInt(ctx.match[1]);
@@ -5604,7 +6390,9 @@ bot.action(/^cancel_order_(\d+)$/, async (ctx) => {
   sess.cancelProcessing = true;
 
   try {
-    const cancelResult = sess.server === "herosms"
+    const cancelResult = sess.server === "fastbit"
+      ? await cancelFastbitOrder(sess.orderId || sess.orderUuid)
+      : sess.server === "herosms"
       ? await cancelHeroSmsOrder(sess.orderId)
       : sess.server === "rumahotp"
       ? await cancelRumahOtpOrder(sess.orderId)
@@ -5695,16 +6483,34 @@ bot.hears("❓ Cara Order", async (ctx) => {
 });
 
 bot.hears("👑 Top Buyer", async (ctx) => {
+  const en     = isEN(ctx.from.id);
   const top    = db.getTopBuyers(10);
-  const medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
-  if (!top.length) return ctx.replyWithHTML("<blockquote>👑 Belum ada transaksi.</blockquote>");
-  let teks = "<blockquote>👑 <b>TOP BUYER</b>\n━━━━━━━━━━━━━━━━\n";
-  top.forEach((b, i) => {
-    const badge = medals[i] || `${i + 1}.`;
-    teks += `${badge} <b>${escapeHTML(b.username || "User")}</b> — ${b.jumlah}x (${rupiah(b.total)})\n`;
+  const numberEmojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"];
+  if (!top.length) {
+    return ctx.replyWithHTML(
+      en
+        ? "<blockquote><b>TOP BUYER (Top 10)</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n<i>No transaction data available yet.</i></blockquote>"
+        : "<blockquote><b>TOP BUYER (10 Teratas)</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n<i>Belum ada data transaksi pembelian.</i></blockquote>"
+    );
+  }
+
+  const items = top.map((b, i) => {
+    const badge = numberEmojis[i] || `${i + 1}️⃣`;
+    const rawName = b.username || `User ${b.userId}`;
+    const displayName = rawName.replace(/^@/, "");
+    const orderCount = b.orderCount || b.jumlah || b.trx || 0;
+    const totalBelanja = b.totalBelanja || b.total || 0;
+    const orderText = en ? `${orderCount} Orders` : `${orderCount} Orderan`;
+    const belanjaText = `Belanja : ${rupiah(totalBelanja)}`;
+
+    return `${badge} <b>${escapeHTML(displayName)}</b>\n${orderText}\n${belanjaText}`;
   });
-  teks += "━━━━━━━━━━━━━━━━</blockquote>";
-  await ctx.replyWithHTML(teks);
+
+  const title = en
+    ? "<b>TOP BUYER (Top 10)</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n"
+    : "<b>TOP BUYER (10 Teratas)</b>\n━━━━━━━━━━━━━━━━━━━━━━\n\n";
+
+  await ctx.replyWithHTML(`<blockquote>${title}${items.join("\n\n")}</blockquote>`);
 });
 
 bot.hears("✨ Produk Populer", async (ctx) => {
@@ -6026,7 +6832,7 @@ bot.command("setprofit", async (ctx) => {
 
   const wahubProfit = db.getProfit("wahub");
   const euProfit = db.getProfit("engineunicorn");
-  const heroProfit = db.getProfit("herosms");
+  const fastbitProfit = db.getProfit("fastbit");
   const roProfit = db.getProfit("rumahotp");
 
   return ctx.replyWithHTML(
@@ -6035,8 +6841,8 @@ bot.command("setprofit", async (ctx) => {
 💰 <b>Profit Default Saat Ini:</b>
 🟢 Server 1⃣ (WA) : <b>${wahubProfit.mode === "percent" ? `${wahubProfit.value}%` : rupiah(wahubProfit.value)}</b> (${wahubProfit.mode})
 🟡 Server 2⃣ (WA) : <b>${euProfit.mode === "percent" ? `${euProfit.value}%` : rupiah(euProfit.value)}</b> (${euProfit.mode})
-✉️ Server 1⃣ (SMS): <b>${heroProfit.mode === "percent" ? `${heroProfit.value}%` : rupiah(heroProfit.value)}</b> (${heroProfit.mode})
-✉️ Server 2⃣ (SMS): <b>${roProfit.mode === "percent" ? `${roProfit.value}%` : rupiah(roProfit.value)}</b> (${roProfit.mode})
+✉️ Server 1⃣ (SMS): <b>${fastbitProfit.mode === "percent" ? `${fastbitProfit.value}%` : rupiah(fastbitProfit.value)}</b> (${fastbitProfit.mode})
+✉️ Server 2⃣ (FlashCall): <b>${roProfit.mode === "percent" ? `${roProfit.value}%` : rupiah(roProfit.value)}</b> (${roProfit.mode})
 ━━━━━━━━━━━━━━━━
 Pilih server yang ingin diatur profitnya:
 
@@ -6052,8 +6858,8 @@ Pilih server yang ingin diatur profitnya:
         Markup.button.callback("🟡 Server 2⃣ (WA)", `profit_provider_engineunicorn_${uid}`),
       ],
       [
-        Markup.button.callback("✉️ Server 1⃣ (SMS)", `profit_provider_herosms_${uid}`),
-        Markup.button.callback("✉️ Server 2⃣ (SMS)", `profit_provider_rumahotp_${uid}`),
+        Markup.button.callback("✉️ Server 1⃣ (SMS)", `profit_provider_fastbit_${uid}`),
+        Markup.button.callback("✉️ Server 2⃣ (FlashCall)", `profit_provider_rumahotp_${uid}`),
       ],
       [
         Markup.button.callback("🌐 Atur Default Semua Server", `profit_set_default_all_${uid}`),
@@ -6062,14 +6868,22 @@ Pilih server yang ingin diatur profitnya:
   );
 });
 
-bot.action(/^profit_provider_(wahub|engineunicorn|herosms|rumahotp)_(\d+)$/, async (ctx) => {
+bot.action(/^profit_provider_(wahub|engineunicorn|fastbit|herosms|rumahotp)_(\d+)$/, async (ctx) => {
   if (!isOwner(ctx)) return ctx.answerCbQuery("❌ Khusus owner.", { show_alert: true });
   const provider = ctx.match[1];
   const uid = parseInt(ctx.match[2]);
   await ctx.answerCbQuery();
   const current = db.getProfit(provider);
   const display = current.mode === "percent" ? `${current.value}%` : rupiah(current.value);
-  const label = provider === "wahub" ? "Server 1⃣ (WA)" : provider === "engineunicorn" ? "Server 2⃣ (WA)" : provider === "herosms" ? "Server 1⃣ (SMS)" : "Server 2⃣ (SMS)";
+  const label = provider === "wahub"
+    ? "Server 1⃣ (WA)"
+    : provider === "engineunicorn"
+    ? "Server 2⃣ (WA)"
+    : provider === "fastbit"
+    ? "Server 1⃣ (SMS)"
+    : provider === "herosms"
+    ? "Server 1⃣ (SMS)"
+    : "Server 2⃣ (FlashCall + SMS)";
 
   return ctx.replyWithHTML(
     `<blockquote>⚙️ <b>SETTING PROFIT — ${label}</b>
@@ -6085,12 +6899,22 @@ Pilih jenis pengaturan profit:</blockquote>`,
   );
 });
 
-bot.action(/^profit_set_default_(wahub|engineunicorn|herosms|rumahotp|all)_(\d+)$/, async (ctx) => {
+bot.action(/^profit_set_default_(wahub|engineunicorn|fastbit|herosms|rumahotp|all)_(\d+)$/, async (ctx) => {
   if (!isOwner(ctx)) return ctx.answerCbQuery("❌ Khusus owner.", { show_alert: true });
   const provider = ctx.match[1];
   const uid = parseInt(ctx.match[2]);
   await ctx.answerCbQuery();
-  const label = provider === "all" ? "Semua Server" : provider === "wahub" ? "Server 1⃣ (WA)" : provider === "engineunicorn" ? "Server 2⃣ (WA)" : provider === "herosms" ? "Server 1⃣ (SMS)" : "Server 2⃣ (SMS)";
+  const label = provider === "all"
+    ? "Semua Server"
+    : provider === "wahub"
+    ? "Server 1⃣ (WA)"
+    : provider === "engineunicorn"
+    ? "Server 2⃣ (WA)"
+    : provider === "fastbit"
+    ? "Server 1⃣ (SMS)"
+    : provider === "herosms"
+    ? "Server 1⃣ (SMS)"
+    : "Server 2⃣ (FlashCall + SMS)";
 
   sessions[uid] = {
     step: "owner_default_profit_value",
@@ -6115,7 +6939,7 @@ bot.action(/^profit_back_main_(\d+)$/, async (ctx) => {
   const uid = parseInt(ctx.match[1]);
   const wahubProfit = db.getProfit("wahub");
   const euProfit = db.getProfit("engineunicorn");
-  const heroProfit = db.getProfit("herosms");
+  const fastbitProfit = db.getProfit("fastbit");
   const roProfit = db.getProfit("rumahotp");
 
   return ctx.replyWithHTML(
@@ -6124,8 +6948,8 @@ bot.action(/^profit_back_main_(\d+)$/, async (ctx) => {
 💰 <b>Profit Default Saat Ini:</b>
 🟢 Server 1⃣ (WA) : <b>${wahubProfit.mode === "percent" ? `${wahubProfit.value}%` : rupiah(wahubProfit.value)}</b> (${wahubProfit.mode})
 🟡 Server 2⃣ (WA) : <b>${euProfit.mode === "percent" ? `${euProfit.value}%` : rupiah(euProfit.value)}</b> (${euProfit.mode})
-✉️ Server 1⃣ (SMS): <b>${heroProfit.mode === "percent" ? `${heroProfit.value}%` : rupiah(heroProfit.value)}</b> (${heroProfit.mode})
-✉️ Server 2⃣ (SMS): <b>${roProfit.mode === "percent" ? `${roProfit.value}%` : rupiah(roProfit.value)}</b> (${roProfit.mode})
+✉️ Server 1⃣ (SMS): <b>${fastbitProfit.mode === "percent" ? `${fastbitProfit.value}%` : rupiah(fastbitProfit.value)}</b> (${fastbitProfit.mode})
+✉️ Server 2⃣ (FlashCall): <b>${roProfit.mode === "percent" ? `${roProfit.value}%` : rupiah(roProfit.value)}</b> (${roProfit.mode})
 ━━━━━━━━━━━━━━━━
 Pilih server yang ingin diatur profitnya:
 
@@ -6141,8 +6965,8 @@ Pilih server yang ingin diatur profitnya:
         Markup.button.callback("🟡 Server 2⃣ (WA)", `profit_provider_engineunicorn_${uid}`),
       ],
       [
-        Markup.button.callback("✉️ Server 1⃣ (SMS)", `profit_provider_herosms_${uid}`),
-        Markup.button.callback("✉️ Server 2⃣ (SMS)", `profit_provider_rumahotp_${uid}`),
+        Markup.button.callback("✉️ Server 1⃣ (SMS)", `profit_provider_fastbit_${uid}`),
+        Markup.button.callback("✉️ Server 2⃣ (FlashCall)", `profit_provider_rumahotp_${uid}`),
       ],
       [
         Markup.button.callback("🌐 Atur Default Semua Server", `profit_set_default_all_${uid}`),
@@ -6151,7 +6975,7 @@ Pilih server yang ingin diatur profitnya:
   );
 });
 
-bot.action(/^profit_services_(wahub|engineunicorn|herosms|rumahotp)_(\d+)$/, async (ctx) => {
+bot.action(/^profit_services_(wahub|engineunicorn|fastbit|herosms|rumahotp)_(\d+)$/, async (ctx) => {
   if (!isOwner(ctx)) return ctx.answerCbQuery("❌ Khusus owner.", { show_alert: true });
   const provider = ctx.match[1];
   const uid = parseInt(ctx.match[2]);
@@ -6160,8 +6984,9 @@ bot.action(/^profit_services_(wahub|engineunicorn|herosms|rumahotp)_(\d+)$/, asy
   let services = [];
   if (provider === "wahub") services = await wahub.getServices();
   else if (provider === "engineunicorn") services = await engineunicorn.getServices();
+  else if (provider === "fastbit") services = await fastbit.getServices();
   else if (provider === "herosms") services = await herosms.getServices();
-  else if (provider === "rumahotp") services = await rumahotp.getServices();
+  else if (provider === "rumahotp") services = await herosms.getServices();
 
   if (!services.length) return ctx.reply("❌ Layanan server ini tidak tersedia dari API.");
   sessions[uid] = {
@@ -6198,8 +7023,17 @@ async function showOwnerProfitServices(ctx, uid, editMsgId = null) {
     `profit_provider_${provider}_${uid}`
   );
 
+  const providerLabelMap = {
+    wahub: "Server 1⃣ (WA)",
+    engineunicorn: "Server 2⃣ (WA)",
+    fastbit: "Server 1⃣ (SMS)",
+    herosms: "Server 1⃣ (SMS)",
+    rumahotp: "Server 2⃣ (FlashCall + SMS)",
+  };
+  const label = providerLabelMap[provider] || provider;
+
   const teks = `<blockquote>🔧 <b>ATUR PROFIT PER LAYANAN</b>
-Server: <b>${escapeHTML(provider)}</b>
+Server: <b>${escapeHTML(label)}</b>
 ━━━━━━━━━━━━━━━━
 Pilih layanan yang ingin diatur profit spesifiknya:
 Hal ${page}/${totalPage}</blockquote>`;
@@ -6218,7 +7052,7 @@ bot.action(/^profit_svc_pg_(\d+)_(\d+)$/, async (ctx) => {
   await showOwnerProfitServices(ctx, uid, ctx.callbackQuery?.message?.message_id);
 });
 
-bot.action(/^profit_service_(wahub|engineunicorn|otpcepat|herosms|rumahotp)_(\d+)_(\d+)$/, async (ctx) => {
+bot.action(/^profit_service_(wahub|engineunicorn|fastbit|herosms|rumahotp)_(\d+)_(\d+)$/, async (ctx) => {
   if (!isOwner(ctx)) return ctx.answerCbQuery("❌ Khusus owner.", { show_alert: true });
   const provider = ctx.match[1];
   const index = parseInt(ctx.match[2]);
@@ -6235,9 +7069,18 @@ bot.action(/^profit_service_(wahub|engineunicorn|otpcepat|herosms|rumahotp)_(\d+
     profitServiceName: service.name,
   };
   await ctx.answerCbQuery();
+  const providerLabelMap = {
+    wahub: "Server 1⃣ (WA)",
+    engineunicorn: "Server 2⃣ (WA)",
+    fastbit: "Server 1⃣ (SMS)",
+    herosms: "Server 1⃣ (SMS)",
+    rumahotp: "Server 2⃣ (FlashCall + SMS)",
+  };
+  const label = providerLabelMap[provider] || provider;
+
   return ctx.replyWithHTML(
     `<blockquote>💰 <b>MASUKKAN PROFIT LAYANAN</b>\n` +
-    `Server: <b>${escapeHTML(provider)}</b>\n` +
+    `Server: <b>${escapeHTML(label)}</b>\n` +
     `Layanan: <b>${escapeHTML(service.name)}</b>\n━━━━━━━━━━━━━━━━\n` +
     `Kirim nominal markup (flat atau persen):\n` +
     `• Contoh flat: <code>500</code>\n` +
@@ -6651,13 +7494,13 @@ Status Server Saat Ini:
 🟢 <b>Server 1⃣ (WA)</b> : ${s1 ? "🟢 <b>AKTIF</b>" : "🔴 <i>NONAKTIF</i>"}
 🟡 <b>Server 2⃣ (WA)</b> : ${s2 ? "🟡 <b>AKTIF</b>" : "🔴 <i>NONAKTIF</i>"}
 ✉️ <b>Server 1⃣ (SMS)</b>: ${sms1 ? "🟢 <b>AKTIF</b>" : "🔴 <i>NONAKTIF</i>"}
-✉️ <b>Server 2⃣ (SMS)</b>: ${sms2 ? "🟡 <b>AKTIF</b>" : "🔴 <i>NONAKTIF</i>"}
+✉️ <b>Server 2⃣ (FlashCall + SMS)</b>: ${sms2 ? "🟡 <b>AKTIF</b>" : "🔴 <i>NONAKTIF</i>"}
 ━━━━━━━━━━━━━━━━
 💡 Klik tombol di bawah untuk mengubah status server, atau gunakan command:
 • <code>/server 1 on</code> / <code>/server 1 off</code> (WA Server 1)
 • <code>/server 2 on</code> / <code>/server 2 off</code> (WA Server 2)
 • <code>/server sms1 on</code> / <code>/server sms1 off</code> (SMS Server 1)
-• <code>/server sms2 on</code> / <code>/server sms2 off</code> (SMS Server 2)</blockquote>`;
+• <code>/server sms2 on</code> / <code>/server sms2 off</code> (SMS Server 2 - FlashCall)</blockquote>`;
 
   const keyboard = Markup.inlineKeyboard([
     [
@@ -6680,7 +7523,7 @@ Status Server Saat Ini:
     ],
     [
       Markup.button.callback(
-        `${sms2 ? "🟡" : "🔴"} Server 2⃣ (SMS): ${sms2 ? "AKTIF" : "NONAKTIF"}`,
+        `${sms2 ? "🟡" : "🔴"} Server 2⃣ (FlashCall): ${sms2 ? "AKTIF" : "NONAKTIF"}`,
         `toggle_server_sms2_${uid}`
       ),
     ],
@@ -6711,7 +7554,7 @@ bot.command(["server", "setserver", "servers"], async (ctx) => {
     if (serverKey === "1") serverLabel = "Server 1⃣ (WA)";
     else if (serverKey === "2") serverLabel = "Server 2⃣ (WA)";
     else if (serverKey === "sms1") serverLabel = "Server 1⃣ (SMS)";
-    else if (serverKey === "sms2") serverLabel = "Server 2⃣ (SMS)";
+    else if (serverKey === "sms2") serverLabel = "Server 2⃣ (FlashCall + SMS)";
     return ctx.replyWithHTML(
       `<blockquote>${isEnable ? "✅" : "🔴"} <b>${serverLabel}</b> berhasil <b>${isEnable ? "DIAKTIFKAN" : "DINONAKTIFKAN"}</b>.</blockquote>`
     );
@@ -6738,7 +7581,7 @@ bot.action(/^toggle_server_(1|2|sms1|sms2)_(\d+)$/, async (ctx) => {
     serverName = "Server 1⃣ (SMS)";
   } else if (serverKey === "sms2") {
     newStatus = !currentStatus.smsServer2;
-    serverName = "Server 2⃣ (SMS)";
+    serverName = "Server 2⃣ (FlashCall + SMS)";
   }
 
   db.setServerStatus(serverKey, newStatus);
@@ -6758,8 +7601,8 @@ bot.command("ceksaldo", async (ctx) => {
   const [b1, b2, bSms1, bSms2] = await Promise.all([
     wahub.getBalance().catch(() => null),
     engineunicorn.getBalance().catch(() => null),
+    fastbit.getBalance().catch(() => null),
     herosms.getBalance().catch(() => null),
-    rumahotp.getBalance().catch(() => null),
   ]);
 
   const b1Text = b1
@@ -6771,12 +7614,12 @@ bot.command("ceksaldo", async (ctx) => {
     : `❌ Gagal: ${escapeHTML(engineunicorn.getLastError() || "tidak tersedia")}`;
 
   const bSms1Text = bSms1
-    ? `💰 Saldo: <b>${usd(bSms1.balance)}</b> (~${rupiah(bSms1.balanceIdr)})`
-    : `❌ Gagal: ${escapeHTML(herosms.getLastError() || "tidak tersedia")}`;
+    ? `💰 Saldo: <b>${bSms1.formatted || rupiah(bSms1.balance)}</b>`
+    : `❌ Gagal: ${escapeHTML(fastbit.getLastError() || "tidak tersedia")}`;
 
   const bSms2Text = bSms2
-    ? `💰 Saldo: <b>${rupiah(bSms2.balance)}</b>`
-    : `❌ Gagal: ${escapeHTML(rumahotp.getLastError() || "tidak tersedia")}`;
+    ? `💰 Saldo: <b>${usd(bSms2.balance)}</b> (~${rupiah(bSms2.balanceIdr)})\n⚡ Metode: <b>FlashCall + SMS</b>`
+    : `❌ Gagal: ${escapeHTML(herosms.getLastError() || "tidak tersedia")}`;
 
   const text = `<blockquote>💰 <b>SALDO PENYEDIA NOKOS</b>
 ━━━━━━━━━━━━━━
@@ -6789,7 +7632,7 @@ ${b2Text}
 ✉️ <b>Server 1⃣ (SMS):</b>
 ${bSms1Text}
 
-✉️ <b>Server 2⃣ (SMS):</b>
+✉️ <b>Server 2⃣ (FlashCall + SMS):</b>
 ${bSms2Text}
 ━━━━━━━━━━━━━━</blockquote>`;
 
@@ -6804,7 +7647,7 @@ bot.command("stats", async (ctx) => {
   const fee = db.getPaymentFee();
   const wahubProfit = db.getProfit("wahub");
   const euProfit = db.getProfit("engineunicorn");
-  const heroProfit = db.getProfit("herosms");
+  const fastbitProfit = db.getProfit("fastbit");
   const roProfit = db.getProfit("rumahotp");
   const serverStatus = db.getServerStatus();
 
@@ -6816,8 +7659,8 @@ bot.command("stats", async (ctx) => {
 💰 Income   : <b>${rupiah(db.getTotalRevenue())}</b>
 💵 Profit S1 (WA) : <b>${wahubProfit.mode === "percent" ? `${wahubProfit.value}%` : rupiah(wahubProfit.value)}</b> (${serverStatus.server1 ? "🟢 Aktif" : "🔴 Tutup"})
 💵 Profit S2 (WA) : <b>${euProfit.mode === "percent" ? `${euProfit.value}%` : rupiah(euProfit.value)}</b> (${serverStatus.server2 ? "🟢 Aktif" : "🔴 Tutup"})
-💵 Profit S1 (SMS): <b>${heroProfit.mode === "percent" ? `${heroProfit.value}%` : rupiah(heroProfit.value)}</b> (${serverStatus.smsServer1 ? "🟢 Aktif" : "🔴 Tutup"})
-💵 Profit S2 (SMS): <b>${roProfit.mode === "percent" ? `${roProfit.value}%` : rupiah(roProfit.value)}</b> (${serverStatus.smsServer2 ? "🟢 Aktif" : "🔴 Tutup"})
+💵 Profit S1 (SMS): <b>${fastbitProfit.mode === "percent" ? `${fastbitProfit.value}%` : rupiah(fastbitProfit.value)}</b> (${serverStatus.smsServer1 ? "🟢 Aktif" : "🔴 Tutup"})
+💵 Profit S2 (FlashCall): <b>${roProfit.mode === "percent" ? `${roProfit.value}%` : rupiah(roProfit.value)}</b> (${serverStatus.smsServer2 ? "🟢 Aktif" : "🔴 Tutup"})
 🧾 Fee QRIS : <b>${fee.mode === "percent" ? `${fee.value}%` : rupiah(fee.value)}</b>
 📤 Depo Manual: <b>${db.getManualDeposit() ? "🟢 AKTIF" : "🔴 NONAKTIF"}</b>
 🛠️ Maintenance: <b>${db.getMaintenance() ? "AKTIF" : "NONAKTIF"}</b>
@@ -6977,8 +7820,10 @@ bot.command("listreseller", async (ctx) => {
 
   const lines = resellers.slice(0, 50).map((u, i) => {
     const name = u.username ? `@${escapeHTML(u.username)}` : `User ${u.id}`;
-    const badge = u.isManualReseller ? "🛠️ Manual" : "🏆 Target";
-    return `${i + 1}. <b>${name}</b> (<code>${u.id}</code>)\n   └ ${badge} · Bulan ini: <b>${u.monthlyTrx || 0}</b> trx · Coin: <b>${rupiah(u.coin || 0)}</b>`;
+    const isManual = Boolean(u.isManualReseller || u.isManual);
+    const badge = isManual ? "🛠️ Manual" : "🏆 Target";
+    const userCoin = u.coin !== undefined && u.coin !== null ? u.coin : (db.getCoin(u.id) || 0);
+    return `${i + 1}. <b>${name}</b> (<code>${u.id}</code>)\n   └ ${badge} · Bulan ini: <b>${u.monthlyTrx || 0}</b> trx · Coin: <b>${rupiah(userCoin)}</b>`;
   });
 
   await ctx.replyWithHTML(
@@ -7399,8 +8244,13 @@ async function restoreWahubPollers() {
       wahubSessionDb.remove(userId);
       continue;
     }
-    if (isWahubWaitingSession(session)) {
-      pollWahub(userId, session.sessionKey || session.trxId || session.orderId);
+    const isWaiting = session.status === "waiting" || isWahubWaitingSession(session);
+    if (isWaiting) {
+      if (["fastbit", "herosms", "rumahotp"].includes(session.provider)) {
+        pollApiSmsOrder({ ...session, userId });
+      } else {
+        pollWahub(userId, session.sessionKey || session.trxId || session.orderId);
+      }
     }
   }
 }
@@ -7484,7 +8334,18 @@ async function restorePendingDeposits() {
       if (mongoConnected) {
         await apiKeys.init();
       }
-      const apiApp = createApiServer();
+      const apiApp = createApiServer({
+        sendRealtimeOtp: sendChannelRealtimeOtpNotification,
+        sendOrderReport: sendChannelOrderReportNotification,
+        onOrderCreated: (sess) => {
+          if (!sess) return;
+          if (sess.provider === "wahub" || sess.provider === "engineunicorn") {
+            pollWahub(sess.userId, sess.sessionKey || sess.trxId || sess.orderId);
+          } else if (sess.provider === "fastbit" || sess.provider === "herosms" || sess.provider === "rumahotp") {
+            pollApiSmsOrder(sess);
+          }
+        },
+      });
       const apiPort = config.API_PORT || 5061;
       apiApp.listen(apiPort, () => {
         console.log(`🌐 [API Server] Developer API aktif di port ${apiPort}`);

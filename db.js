@@ -21,10 +21,19 @@ function getCurrentMonth() {
   }).format(new Date());
 }
 
+function isMongoReady() {
+  return Boolean(_mongoReady || (mongoose.connection && mongoose.connection.readyState === 1));
+}
+
 // ══════════════════════════════════════════════════════════════
 // KONEKSI MONGODB
 // ══════════════════════════════════════════════════════════════
 async function connectMongo(uri) {
+  if (mongoose.connection && mongoose.connection.readyState === 1) {
+    _mongoReady = true;
+    if (!_cache) await loadFromMongo();
+    return true;
+  }
   try {
     await mongoose.connect(uri, {
       serverSelectionTimeoutMS: 10000,
@@ -138,11 +147,12 @@ async function loadFromMongo() {
 function defaultSettings() {
   return {
     wahub: { profit: { mode: "flat", value: 100 } },
-    providers: { wahub: true, engineunicorn: true, otpcepat: true, herosms: true, rumahotp: true },
+    providers: { wahub: true, engineunicorn: true, otpcepat: true, fastbit: true, herosms: true, rumahotp: true },
     profit: {
       wahub: { mode: "flat", value: 100 },
       engineunicorn: { mode: "flat", value: 100 },
       otpcepat: { mode: "flat", value: 0 },
+      fastbit: { mode: "flat", value: 500 },
       herosms: { mode: "flat", value: 500 },
       rumahotp: { mode: "flat", value: 500 },
     },
@@ -251,6 +261,7 @@ function normalize(data) {
     otpcepat: data.settings.providers.otpcepat !== false,
     herosms: data.settings.providers.herosms !== false,
     rumahotp: data.settings.providers.rumahotp !== false,
+    fastbit: data.settings.providers.fastbit !== false,
   };
 
   if (!data.settings.profit) data.settings.profit = {};
@@ -260,6 +271,7 @@ function normalize(data) {
     otpcepat: normalizeRule(data.settings.profit?.otpcepat, 0),
     herosms: normalizeRule(data.settings.profit?.herosms, 500),
     rumahotp: normalizeRule(data.settings.profit?.rumahotp, 500),
+    fastbit: normalizeRule(data.settings.profit?.fastbit, 500),
   };
   data.settings.paymentFee = normalizeRule(data.settings.paymentFee, 0);
   data.settings.maintenance = data.settings.maintenance === true;
@@ -331,6 +343,7 @@ function loadProfitDb() {
         otpcepat: { mode: "flat", value: 0 },
         herosms: { mode: "flat", value: 500 },
         rumahotp: { mode: "flat", value: 500 },
+        fastbit: { mode: "flat", value: 500 },
       },
       services: {},
     };
@@ -387,16 +400,19 @@ function normalizeProvider(provider) {
   if (["wahub", "server1", "server 1", "server_1", "srv1", "s1", "wa1", "wa 1", "1"].includes(value)) {
     return "wahub";
   }
-  if (["engineunicorn", "unicorn", "server2", "server 2", "server_2", "srv2", "s2", "wa2", "wa 2", "2"].includes(value)) {
+  if (["engineunicorn", "ninjaotp", "ninjatop", "unicorn", "server2", "server 2", "server_2", "srv2", "s2", "wa2", "wa 2", "2"].includes(value)) {
     return "engineunicorn";
   }
   if (["otpcepat", "otp cepat", "otpcepat.org", "smscode", "smscode.gg", "smscodegg"].includes(value)) {
     return "otpcepat";
   }
-  if (["herosms", "hero sms", "hero-sms", "sms1", "sms 1", "server1sms", "server 1 sms", "s1sms", "hero"].includes(value)) {
+  if (["fastbit", "fast-bit", "claudexis", "fastbit.co.id", "sms1", "sms 1", "server1sms", "server 1 sms", "s1sms"].includes(value)) {
+    return "fastbit";
+  }
+  if (["herosms", "hero sms", "hero-sms", "hero"].includes(value)) {
     return "herosms";
   }
-  if (["rumahotp", "rumah-otp", "rumah otp", "ro", "sms2", "sms 2", "server2sms", "server 2 sms", "s2sms"].includes(value)) {
+  if (["rumahotp", "rumah-otp", "rumah otp", "ro", "sms2", "sms 2", "server2sms", "server 2 sms", "s2sms", "flashcall", "flash_call", "herosms_flashcall", "fc"].includes(value)) {
     return "rumahotp";
   }
   return null;
@@ -625,11 +641,13 @@ function addCoin(userId, jumlah) {
     registerUser(userId, String(userId));
     return addCoin(userId, jumlah);
   }
-  db.users[userId].coin = (db.users[userId].coin || 0) + Number(jumlah);
+  const amt = Number(jumlah);
+  if (!Number.isFinite(amt) || amt <= 0) return db.users[userId].coin || 0;
+  db.users[userId].coin = (db.users[userId].coin || 0) + amt;
   save(db);
 
   if (_mongoReady) {
-    User.updateOne({ userId: String(userId) }, { $inc: { coin: Number(jumlah) } })
+    User.updateOne({ userId: String(userId) }, { $set: { coin: db.users[userId].coin } })
       .catch(err => console.error("⚠️ [MongoDB] addCoin error:", err.message));
   }
 
@@ -640,12 +658,14 @@ function deductCoin(userId, jumlah) {
   const db   = load();
   const user = db.users[userId];
   if (!user) return false;
-  if ((user.coin || 0) < Number(jumlah)) return false;
-  user.coin -= Number(jumlah);
+  const amt = Number(jumlah);
+  if (!Number.isFinite(amt) || amt <= 0) return user.coin;
+  if ((user.coin || 0) < amt) return false;
+  user.coin -= amt;
   save(db);
 
   if (_mongoReady) {
-    User.updateOne({ userId: String(userId) }, { $inc: { coin: -Number(jumlah) } })
+    User.updateOne({ userId: String(userId) }, { $set: { coin: user.coin } })
       .catch(err => console.error("⚠️ [MongoDB] deductCoin error:", err.message));
   }
 
@@ -675,6 +695,68 @@ function resetAllBalances(excludeUserId = null) {
   }
 
   return { count, totalReset };
+}
+
+async function syncUser(userId) {
+  if (!userId) return null;
+  const uid = String(userId);
+  if (isMongoReady()) {
+    try {
+      const u = await User.findOne({ userId: uid }).lean();
+      if (u) {
+        const d = load();
+        d.users[uid] = {
+          ...(d.users[uid] || {}),
+          username: u.username || d.users[uid]?.username || "",
+          joinedAt: u.joinedAt || d.users[uid]?.joinedAt || new Date().toISOString(),
+          coin: Number(u.coin || 0),
+          trx: Number(u.trx || 0),
+          isReseller: Boolean(u.isReseller),
+          isManualReseller: Boolean(u.isManualReseller),
+          resellerUnlockedAt: u.resellerUnlockedAt || d.users[uid]?.resellerUnlockedAt || null,
+          monthlyTrx: Number(u.monthlyTrx || 0),
+          lastTrxMonth: u.lastTrxMonth || getCurrentMonth(),
+          referralCode: u.referralCode || d.users[uid]?.referralCode || makeReferralCode(uid),
+          referredBy: u.referredBy || d.users[uid]?.referredBy || null,
+          referralCount: Number(u.referralCount || 0),
+          referralEarned: Number(u.referralEarned || 0),
+        };
+        return d.users[uid];
+      }
+    } catch (err) {
+      console.error("⚠️ [MongoDB] syncUser error:", err.message);
+    }
+  }
+  return getUser(uid);
+}
+
+async function persistUser(userId) {
+  if (!userId || !isMongoReady()) return false;
+  const uid = String(userId);
+  const u = getUser(uid);
+  if (!u) return false;
+  try {
+    await User.updateOne(
+      { userId: uid },
+      {
+        $set: {
+          username: u.username || "",
+          coin: Number(u.coin || 0),
+          trx: Number(u.trx || 0),
+          isReseller: Boolean(u.isReseller),
+          isManualReseller: Boolean(u.isManualReseller),
+          resellerUnlockedAt: u.resellerUnlockedAt || null,
+          monthlyTrx: Number(u.monthlyTrx || 0),
+          lastTrxMonth: u.lastTrxMonth || getCurrentMonth(),
+        },
+      },
+      { upsert: true }
+    );
+    return true;
+  } catch (err) {
+    console.error("⚠️ [MongoDB] persistUser error:", err.message);
+    return false;
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -768,6 +850,7 @@ function addTransaction({
     checkUserMonth(uid);
     db.users[uid].trx += 1;
     db.users[uid].monthlyTrx = (db.users[uid].monthlyTrx || 0) + 1;
+    checkAndPromoteReseller(uid);
   }
   save(db);
 
@@ -791,14 +874,63 @@ function getRiwayat(userId, limit = 5) {
 }
 
 function getTopBuyers(limit = 10) {
-  const db  = load();
+  const db = load();
   const map = {};
-  for (const t of db.transactions) {
-    if (!map[t.userId]) map[t.userId] = { username: t.username, total: 0, jumlah: 0 };
-    map[t.userId].total  += t.harga;
-    map[t.userId].jumlah += 1;
+
+  // 1. Agregasi dari transaksi yang valid dan tidak di-refund
+  for (const t of (db.transactions || [])) {
+    if (!t || !t.userId || String(t.userId) === "undefined" || String(t.userId) === "null") continue;
+    if (t.refunded === true || t.refunded === "true" || t.refunded === 1) continue;
+    const uid = String(t.userId);
+    if (!map[uid]) {
+      const u = db.users[uid];
+      map[uid] = {
+        userId: uid,
+        username: u?.username || t.username || `User ${uid.slice(0, 4)}...`,
+        orderCount: 0,
+        totalBelanja: 0,
+        coin: Number(u?.coin || 0),
+        jumlah: 0,
+        total: 0,
+        trx: 0,
+      };
+    }
+    const harga = Math.max(0, Number(t.harga) || 0);
+    map[uid].orderCount += 1;
+    map[uid].jumlah += 1;
+    map[uid].trx += 1;
+    map[uid].totalBelanja += harga;
+    map[uid].total += harga;
   }
-  return Object.values(map).sort((a, b) => b.jumlah - a.jumlah).slice(0, limit);
+
+  // 2. Gabungkan user yang memiliki transaksi di data user dan perbarui username
+  for (const [uid, u] of Object.entries(db.users || {})) {
+    if (!map[uid] && (u.trx > 0)) {
+      map[uid] = {
+        userId: uid,
+        username: u.username || `User ${uid.slice(0, 4)}...`,
+        orderCount: Number(u.trx || 0),
+        jumlah: Number(u.trx || 0),
+        trx: Number(u.trx || 0),
+        totalBelanja: 0,
+        total: 0,
+        coin: Number(u.coin || 0),
+      };
+    } else if (map[uid] && u.username) {
+      map[uid].username = u.username;
+    }
+  }
+
+  const list = Object.values(map);
+  // Urutkan berdasarkan jumlah orderan terbanyak (sesuai data riil bot)
+  list.sort((a, b) => {
+    if (b.orderCount !== a.orderCount) {
+      return b.orderCount - a.orderCount;
+    }
+    return b.totalBelanja - a.totalBelanja;
+  });
+
+  return list.slice(0, limit);
 }
 
 function getUser(userId) {
@@ -842,8 +974,9 @@ function markRefunded(trxId) {
     trx.refunded = true;
     const uid = String(trx.userId);
     const user = db.users[uid];
-    if (user && (user.monthlyTrx || 0) > 0) {
-      user.monthlyTrx -= 1;
+    if (user) {
+      if ((user.monthlyTrx || 0) > 0) user.monthlyTrx -= 1;
+      if ((user.trx || 0) > 0) user.trx -= 1;
     }
     save(db);
 
@@ -852,6 +985,8 @@ function markRefunded(trxId) {
         .catch(err => console.error("⚠️ [MongoDB] markRefunded error:", err.message));
       User.updateOne({ userId: uid, monthlyTrx: { $gt: 0 } }, { $inc: { monthlyTrx: -1 } })
         .catch(err => console.error("⚠️ [MongoDB] refundMonthlyTrx error:", err.message));
+      User.updateOne({ userId: uid, trx: { $gt: 0 } }, { $inc: { trx: -1 } })
+        .catch(err => console.error("⚠️ [MongoDB] refundTrxCount error:", err.message));
     }
   }
 }
@@ -876,18 +1011,18 @@ function refundTransaction(trxId, userId) {
   trx.refunded = true;
   trx.refundedAt = new Date().toISOString();
   user.coin = (user.coin || 0) + amount;
-  if ((user.monthlyTrx || 0) > 0) {
-    user.monthlyTrx -= 1;
-  }
+  if ((user.monthlyTrx || 0) > 0) user.monthlyTrx -= 1;
+  if ((user.trx || 0) > 0) user.trx -= 1;
   save(db);
 
   if (_mongoReady) {
     Transaction.updateOne({ id: trxId }, { refunded: true, refundedAt: trx.refundedAt })
       .catch(err => console.error("⚠️ [MongoDB] refundTrx error:", err.message));
     User.updateOne({ userId: String(userId) }, {
-      $inc: {
-        coin: amount,
-        ...(user.monthlyTrx >= 0 ? { monthlyTrx: -1 } : {}),
+      $set: {
+        coin: user.coin,
+        monthlyTrx: user.monthlyTrx || 0,
+        trx: user.trx || 0,
       },
     }).catch(err => console.error("⚠️ [MongoDB] refundCoin error:", err.message));
   }
@@ -908,7 +1043,7 @@ function setProviderStatus(provider, isOpen) {
   const db = load();
   const providerValue = String(provider || "").toLowerCase().trim();
   const names = providerValue === "all"
-    ? ["wahub", "engineunicorn"]
+    ? ["wahub", "engineunicorn", "fastbit", "herosms", "rumahotp"]
     : [normalizeProvider(provider)].filter(Boolean);
   if (!names.length) return false;
   for (const name of names) db.settings.providers[name] = Boolean(isOpen);
@@ -921,7 +1056,7 @@ function getServerStatus() {
   return {
     server1: db.settings.providers?.wahub !== false,
     server2: db.settings.providers?.engineunicorn !== false,
-    smsServer1: db.settings.providers?.herosms !== false,
+    smsServer1: db.settings.providers?.fastbit !== false,
     smsServer2: db.settings.providers?.rumahotp !== false,
   };
 }
@@ -930,9 +1065,10 @@ function setServerStatus(serverNum, isOpen) {
   const num = String(serverNum).toLowerCase();
   let target = null;
   if (num === "1" || num === "wa1") target = "wahub";
-  else if (num === "2" || num === "wa2") target = "engineunicorn";
-  else if (num === "sms1" || num === "herosms") target = "herosms";
-  else if (num === "sms2" || num === "rumahotp") target = "rumahotp";
+  else if (num === "2" || num === "wa2" || num === "ninjaotp" || num === "ninjatop") target = "engineunicorn";
+  else if (num === "sms1" || num === "fastbit" || num === "claudexis") target = "fastbit";
+  else if (num === "herosms") target = "herosms";
+  else if (num === "sms2" || num === "rumahotp" || num === "flashcall" || num === "fc") target = "rumahotp";
   if (!target) return false;
   return setProviderStatus(target, isOpen);
 }
@@ -959,7 +1095,7 @@ function setProfit(provider, mode, value) {
   const providerValue = String(provider || "").toLowerCase().trim();
   if (!normalizedMode || !Number.isFinite(numericValue) || numericValue < 0) return false;
   const names = providerValue === "all"
-    ? ["wahub", "engineunicorn", "herosms", "rumahotp"]
+    ? ["wahub", "engineunicorn", "fastbit", "herosms", "rumahotp"]
     : [normalizeProvider(provider)].filter(Boolean);
   if (providerValue === "wahub") names.push("wahub");
   if (providerValue === "engineunicorn") names.push("engineunicorn");
@@ -1158,7 +1294,9 @@ function getResellers() {
         username: user.username || `User ${id}`,
         monthlyTrx: Number(user.monthlyTrx || 0),
         totalTrx: Number(user.trx || 0),
+        coin: Number(user.coin || 0),
         isManual: Boolean(user.isManualReseller),
+        isManualReseller: Boolean(user.isManualReseller),
         unlockedAt: user.resellerUnlockedAt,
       });
     }
@@ -1342,7 +1480,7 @@ function removeMandatoryJoin(identifier) {
 // EXPORTS
 // ══════════════════════════════════════════════════════════════
 module.exports = {
-  connectMongo,
+  connectMongo, isMongoReady, syncUser, persistUser,
   registerUser, getTotalUsers, getTotalTrx, getTotalRevenue, getUser,
   getUsers, findUserByUsername, getTransactions,
   getCoin, addCoin, deductCoin, resetAllBalances,

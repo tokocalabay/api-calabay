@@ -12,16 +12,23 @@ module.exports = {
   WAHUB_API_URL: "https://dehuyzotp.shop",
   WAHUB_API_TOKEN: "wh_6b6a4b61f0888db075a1ec2081a47015831d50017986d9060cd30a4f3c87c53a",
 
-  // ── SERVER 2: ENGINEUNICORN (https://engineunicorn.cloud/docs)
-  ENGINEUNICORN_API_URL: "https://engineunicorn.cloud/v1",
-  ENGINEUNICORN_API_KEY: "sk_WuoGP1yUX40BwymUu6UFYL94Ygj3kgUw",
+  // ── SERVER 2: NINJA OTP (https://app.ninjatop.cloud/dokumentasi) ─
+  NINJAOTP_API_URL: process.env.NINJAOTP_API_URL || "https://app.ninjatop.cloud/api/public/v1",
+  NINJAOTP_API_KEY: process.env.NINJAOTP_API_KEY || "nk_044282e51ea7e33705f78ebf9c9e6e85515aa044bb1d744d", // Ganti dengan API Key Ninja OTP Anda (format: nk_...)
+  // Fallback kompatibilitas:
+  ENGINEUNICORN_API_URL: process.env.NINJAOTP_API_URL || "https://app.ninjatop.cloud/api/public/v1",
+  ENGINEUNICORN_API_KEY: process.env.NINJAOTP_API_KEY || "nk_044282e51ea7e33705f78ebf9c9e6e85515aa044bb1d744d",
 
-  // ── OTP SMS - SERVER 1: HERO SMS (https://hero-sms.com) ───
+  // ── OTP SMS SERVER 1: FASTBIT (https://fastbit.co.id) ────
+  FASTBIT_API_URL: process.env.FASTBIT_API_URL || "https://fastbit.co.id",
+  FASTBIT_API_KEY: process.env.FASTBIT_API_KEY || "CCaU2XV8a89QfkIm5P1HygVFi0AOREzrtBOm3i2QovO3l0jdO7krVi88ygRN",
+
+  // ── OTP SMS SERVER 2: HERO SMS FlashCall (https://hero-sms.com) ──
   HERO_SMS_API_URL: process.env.HERO_SMS_API_URL || "https://hero-sms.com",
   HERO_SMS_API_KEY: process.env.HERO_SMS_API_KEY || "9dbAd5c9bfc8c900b8bbedb40d1d5AA3",
   HERO_SMS_USD_TO_IDR: Number(process.env.HERO_SMS_USD_TO_IDR || 16000),
 
-  // ── OTP SMS - SERVER 2: RUMAHOTP (https://www.rumahotp.io/developer/api)
+  // Fallback kompatibilitas RumahOTP (legacy):
   RUMAHOTP_API_URL: process.env.RUMAHOTP_API_URL || "https://www.rumahotp.io/api",
   RUMAHOTP_API_KEY: process.env.RUMAHOTP_API_KEY || "rk-dev-EKlPS39ErkJ6AhPKpTjWtc5NQ9NA1KDD",
 

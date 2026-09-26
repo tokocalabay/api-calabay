@@ -14,11 +14,18 @@ const wahub = require("./lib/wahub");
 const engineunicorn = require("./lib/engineunicorn");
 const herosms = require("./lib/herosms");
 const rumahotp = require("./lib/rumahotp");
+const fastbit = require("./lib/fastbit");
 const apiKeys = require("./lib/api-keys");
 const wahubSessionDb = require("./wahub-session-db");
 const path = require("path");
 
 const router = express.Router();
+
+let apiCallbacks = {
+  onOrderCreated: null,
+  sendRealtimeOtp: null,
+  sendOrderReport: null,
+};
 
 // ══════════════════════════════════════════════════════════════
 // MIDDLEWARE
@@ -71,7 +78,15 @@ async function authMiddleware(req, res, next) {
 
   // Attach user info to request
   req.apiKey = key;
-  req.apiUserId = keyData.userId;
+  req.apiUserId = String(keyData.userId);
+
+  // Sync user data & coin from MongoDB so API balance always matches Telegram
+  try {
+    await db.syncUser(req.apiUserId);
+  } catch (err) {
+    console.error("⚠️ [API Server] syncUser error in authMiddleware:", err.message);
+  }
+
   next();
 }
 
@@ -86,9 +101,9 @@ function rupiah(n) {
 function normalizeProvider(provider) {
   const p = String(provider || "").trim().toLowerCase();
   if (["server_1", "server1", "wa1", "whatsapp1", "wahub"].includes(p)) return "wahub";
-  if (["server_2", "server2", "wa2", "whatsapp2", "engineunicorn"].includes(p)) return "engineunicorn";
-  if (["sms_1", "sms1", "sms_server1", "herosms", "hero"].includes(p)) return "herosms";
-  if (["sms_2", "sms2", "sms_server2", "rumahotp", "rumah"].includes(p)) return "rumahotp";
+  if (["server_2", "server2", "wa2", "whatsapp2", "engineunicorn", "ninjaotp", "ninjatop"].includes(p)) return "engineunicorn";
+  if (["sms_1", "sms1", "sms_server1", "fastbit", "fast-bit", "claudexis"].includes(p)) return "fastbit";
+  if (["sms_2", "sms2", "sms_server2", "herosms", "hero", "rumahotp", "rumah", "flashcall", "flash_call", "fc"].includes(p)) return "herosms";
   return p;
 }
 
@@ -96,7 +111,8 @@ function getPublicProviderCode(internalProvider) {
   const map = {
     wahub: "server_1",
     engineunicorn: "server_2",
-    herosms: "sms_1",
+    fastbit: "sms_1",
+    herosms: "sms_2",
     rumahotp: "sms_2",
   };
   return map[internalProvider] || internalProvider;
@@ -106,12 +122,14 @@ function getProviderLabel(provider) {
   const labels = {
     wahub: "Server 1 (WhatsApp)",
     engineunicorn: "Server 2 (WhatsApp)",
-    herosms: "Server 1 (SMS)",
-    rumahotp: "Server 2 (SMS)",
+    fastbit: "Server 1 (SMS)",
+    herosms: "Server 2 (SMS - FlashCall)",
+    rumahotp: "Server 2 (SMS - FlashCall)",
     server_1: "Server 1 (WhatsApp)",
     server_2: "Server 2 (WhatsApp)",
     sms_1: "Server 1 (SMS)",
-    sms_2: "Server 2 (SMS)",
+    sms_2: "Server 2 (SMS - FlashCall)",
+    flashcall: "Server 2 (SMS - FlashCall)",
   };
   return labels[provider] || "Server 1";
 }
@@ -174,18 +192,18 @@ router.get("/services", authMiddleware, async (req, res) => {
     }
 
     // SMS providers
-    if (!provider || provider === "herosms") {
-      if (db.getProviderStatus("herosms") !== false) {
+    if (!provider || provider === "fastbit") {
+      if (db.getProviderStatus("fastbit") !== false) {
         try {
-          const services = await herosms.getServices();
+          const services = await fastbit.getServices();
           result.sms.push(
             ...services
               .filter((s) => s.id && s.name)
               .map((s) => ({
                 service_id: String(s.id),
                 name: s.name,
-                price: db.calculatePrice("herosms", s.price || 0, s.id, req.apiUserId),
-                stock: Number(s.stock) || 0,
+                price: db.calculatePrice("fastbit", 0, s.id, req.apiUserId),
+                stock: 0,
                 provider: "sms_1",
                 server: "sms_1",
                 server_label: "Server 1 (SMS)",
@@ -196,22 +214,23 @@ router.get("/services", authMiddleware, async (req, res) => {
       }
     }
 
-    if (!provider || provider === "rumahotp") {
-      if (db.getProviderStatus("rumahotp") !== false) {
+    if (!provider || provider === "herosms" || provider === "rumahotp") {
+      if (db.getProviderStatus("rumahotp") !== false || db.getProviderStatus("herosms") !== false) {
         try {
-          const services = await rumahotp.getServices();
+          const services = await herosms.getServices();
           result.sms.push(
             ...services
               .filter((s) => s.id && s.name)
               .map((s) => ({
                 service_id: String(s.id),
-                name: s.name,
+                name: `${s.name} (FlashCall + SMS)`,
                 price: db.calculatePrice("rumahotp", s.price || 0, s.id, req.apiUserId),
                 stock: Number(s.stock) || 0,
                 provider: "sms_2",
                 server: "sms_2",
-                server_label: "Server 2 (SMS)",
-                type: "sms",
+                server_label: "Server 2 (SMS - FlashCall + SMS)",
+                type: "flashcall",
+                verification_type: "flashcall",
               }))
           );
         } catch (e) {}
@@ -222,6 +241,68 @@ router.get("/services", authMiddleware, async (req, res) => {
       success: true,
       data: result,
       total: result.whatsapp.length + result.sms.length,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: error.message },
+    });
+  }
+});
+
+// ── GET /api/v1/countries ───────────────────────────────────
+// List countries and offers for a service
+router.get("/countries", authMiddleware, async (req, res) => {
+  try {
+    const rawP = req.query.provider || req.query.server || "sms_1";
+    const provider = normalizeProvider(rawP);
+    const serviceId = req.query.service_id;
+    if (!serviceId) {
+      return res.status(400).json({
+        success: false,
+        error: { code: "MISSING_FIELD", message: "Parameter 'service_id' wajib diisi." },
+      });
+    }
+
+    if (provider === "fastbit") {
+      const countries = await fastbit.getCountriesForService(serviceId);
+      return res.json({
+        success: true,
+        data: (countries || []).map((c) => ({
+          country_id: c.iso,
+          name: c.name,
+          iso: c.iso,
+          prefix: c.prefix,
+          price: db.calculatePrice("fastbit", c.price, serviceId, req.apiUserId),
+          stock: c.stock,
+          offers: (c.offers || []).map((o) => ({
+            otp_service_id: o.id,
+            operator: o.operator,
+            price: db.calculatePrice("fastbit", o.price, serviceId, req.apiUserId),
+            stock: o.stock,
+          })),
+        })),
+        total: (countries || []).length,
+      });
+    }
+
+    if (provider === "herosms" || provider === "rumahotp") {
+      const countries = await herosms.getCountries();
+      return res.json({
+        success: true,
+        data: (countries || []).map((c) => ({
+          country_id: String(c.id),
+          name: c.name,
+          iso: c.iso || c.code || "",
+          prefix: c.prefix || "",
+        })),
+        total: (countries || []).length,
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: { code: "NOT_SUPPORTED", message: "Provider ini tidak mendukung pemilihan negara." },
     });
   } catch (error) {
     res.status(500).json({
@@ -259,6 +340,8 @@ router.get("/balance", authMiddleware, (req, res) => {
 router.post("/order", authMiddleware, async (req, res) => {
   try {
     const uid = req.apiUserId;
+    const apiUser = db.getUser(uid);
+    const apiUsername = apiUser?.username || "api_user";
     const { service_id, provider: rawProvider, server: rawServer, country_id, operator_id } = req.body || {};
     const chosenProvider = rawProvider || rawServer;
 
@@ -276,7 +359,7 @@ router.post("/order", authMiddleware, async (req, res) => {
     }
 
     const provider = normalizeProvider(chosenProvider);
-    const validProviders = ["wahub", "engineunicorn", "herosms", "rumahotp"];
+    const validProviders = ["wahub", "engineunicorn", "fastbit", "herosms", "rumahotp"];
     if (!validProviders.includes(provider)) {
       return res.status(400).json({
         success: false,
@@ -334,30 +417,37 @@ router.post("/order", authMiddleware, async (req, res) => {
           error: { code: "DEDUCT_FAILED", message: "Gagal memotong saldo." },
         });
       }
+      await db.persistUser(uid);
       order = await wahub.rent(svc.id);
       if (!order?.order_id || !order.token || !order.phone) {
         db.addCoin(uid, price);
+        await db.persistUser(uid);
         return res.status(502).json({
           success: false,
           error: { code: "ORDER_FAILED", message: wahub.getLastError() || "Gagal order nomor. Stok habis." },
         });
       }
       const trxId = db.addTransaction({
-        userId: uid, username: "api_user", orderId: order.order_id,
+        userId: uid, username: apiUsername, orderId: order.order_id,
         phone: order.phone, productName: serviceName, negara: "Indonesia",
         harga: price, provider: "wahub", serviceId: svc.id, providerPrice,
       });
 
       // Create wahub session for polling
       const expiryMs = Date.now() + 20 * 60 * 1000;
-      wahubSessionDb.set(uid, {
+      const newSess = {
+        userId: uid,
         step: "tunggu_otp", status: "waiting", providerStatus: "waiting",
         provider: "wahub", createdAt: new Date().toISOString(),
-        serviceId: svc.id, serviceName, hargaUser: price,
+        serviceId: svc.id, serviceName, hargaUser: price, providerPrice,
         orderId: order.order_id, token: order.token, phone: order.phone,
         expiresAt: expiryMs, cancelAt: 0, retryCount: 0, trxId,
         sessionKey: trxId, source: "api",
-      });
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
+      }
 
       return res.status(201).json({
         success: true,
@@ -407,29 +497,36 @@ router.post("/order", authMiddleware, async (req, res) => {
           error: { code: "DEDUCT_FAILED", message: "Gagal memotong saldo." },
         });
       }
+      await db.persistUser(uid);
       order = await engineunicorn.rent(svc.id);
       if (!order?.order_id || !order.phone) {
         db.addCoin(uid, price);
+        await db.persistUser(uid);
         return res.status(502).json({
           success: false,
           error: { code: "ORDER_FAILED", message: engineunicorn.getLastError() || "Gagal order nomor. Stok habis." },
         });
       }
       const trxId = db.addTransaction({
-        userId: uid, username: "api_user", orderId: order.order_id,
+        userId: uid, username: apiUsername, orderId: order.order_id,
         phone: order.phone, productName: serviceName, negara: "Indonesia",
         harga: price, provider: "engineunicorn", serviceId: svc.id, providerPrice,
       });
 
       const expiryMs = Date.now() + 20 * 60 * 1000;
-      wahubSessionDb.set(uid, {
+      const newSess = {
+        userId: uid,
         step: "tunggu_otp", status: "waiting", providerStatus: "waiting",
         provider: "engineunicorn", createdAt: new Date().toISOString(),
-        serviceId: svc.id, serviceName, hargaUser: price,
+        serviceId: svc.id, serviceName, hargaUser: price, providerPrice,
         orderId: order.order_id, token: order.token || order.order_id,
         phone: order.phone, expiresAt: expiryMs, cancelAt: 0, retryCount: 0,
         trxId, sessionKey: trxId, source: "api",
-      });
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
+      }
 
       return res.status(201).json({
         success: true,
@@ -449,6 +546,147 @@ router.post("/order", authMiddleware, async (req, res) => {
     }
 
     // ── SMS providers ──
+    if (provider === "fastbit") {
+      let otpServiceId = req.body.otp_service_id;
+      let countryObj = null;
+      let chosenOffer = null;
+
+      if (!otpServiceId) {
+        const countries = await fastbit.getCountriesForService(service_id);
+        if (!countries || !countries.length) {
+          return res.status(404).json({
+            success: false,
+            error: { code: "SERVICE_NOT_FOUND", message: "Layanan atau negara tidak tersedia." },
+          });
+        }
+
+        if (country_id) {
+          const cId = String(country_id).trim().toUpperCase();
+          countryObj = countries.find((c) => c.iso === cId || c.id === cId || c.name.toUpperCase().includes(cId));
+        } else {
+          countryObj = countries.find((c) => c.iso === "ID") || countries[0];
+        }
+
+        if (!countryObj || !countryObj.offers || !countryObj.offers.length) {
+          return res.status(404).json({
+            success: false,
+            error: { code: "COUNTRY_NOT_FOUND", message: `Negara '${country_id || "default"}' tidak tersedia untuk layanan ini.` },
+          });
+        }
+
+        if (operator_id) {
+          const opId = String(operator_id).trim().toLowerCase();
+          chosenOffer = countryObj.offers.find((o) => o.operator.toLowerCase() === opId || o.id === opId);
+        }
+        if (!chosenOffer) {
+          chosenOffer = countryObj.offers[0];
+        }
+        otpServiceId = chosenOffer.id;
+      }
+
+      if (!chosenOffer) {
+        providerPrice = Number(req.body.price) || 0;
+      } else {
+        providerPrice = chosenOffer.price;
+      }
+
+      serviceName = `SMS - ${service_id}`;
+      const price = db.calculatePrice("fastbit", providerPrice, service_id, uid);
+      const coin = db.getCoin(uid);
+      if (coin < price) {
+        return res.status(402).json({
+          success: false,
+          error: {
+            code: "INSUFFICIENT_BALANCE",
+            message: `Coin tidak cukup. Harga: ${rupiah(price)}, Coin kamu: ${rupiah(coin)}.`,
+            required: price,
+            balance: coin,
+          },
+        });
+      }
+
+      const deducted = db.deductCoin(uid, price);
+      if (deducted === false) {
+        return res.status(500).json({
+          success: false,
+          error: { code: "DEDUCT_FAILED", message: "Gagal memotong saldo." },
+        });
+      }
+      await db.persistUser(uid);
+
+      order = await fastbit.createOrder({ otpServiceId });
+      if (!order?.order_uuid || !order.phone_number) {
+        db.addCoin(uid, price);
+        await db.persistUser(uid);
+        return res.status(502).json({
+          success: false,
+          error: { code: "ORDER_FAILED", message: fastbit.getLastError() || "Gagal order nomor SMS." },
+        });
+      }
+
+      const countryName = countryObj?.name || country_id || "Indonesia";
+      const trxId = db.addTransaction({
+        userId: uid,
+        username: apiUsername,
+        orderId: order.order_uuid,
+        phone: order.phone_number,
+        productName: serviceName,
+        negara: countryName,
+        harga: price,
+        provider: "fastbit",
+        serviceId: service_id,
+        countryId: country_id || countryObj?.iso || "ID",
+        operatorId: chosenOffer?.operator || operator_id || "",
+        providerPrice,
+      });
+
+      const expiryMs = order.expired_at || Date.now() + 20 * 60 * 1000;
+      const newSess = {
+        userId: uid,
+        step: "tunggu_otp",
+        status: "waiting",
+        providerStatus: "waiting",
+        provider: "fastbit",
+        createdAt: new Date().toISOString(),
+        serviceId: service_id,
+        serviceName,
+        hargaUser: price,
+        providerPrice,
+        orderId: order.order_uuid,
+        orderUuid: order.order_uuid,
+        numericOrderId: order.order_id,
+        token: order.order_uuid,
+        phone: order.phone_number,
+        expiresAt: expiryMs,
+        cancelAt: 0,
+        retryCount: 0,
+        trxId,
+        sessionKey: trxId,
+        source: "api",
+        verificationType: "sms",
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
+      }
+
+      return res.status(201).json({
+        success: true,
+        data: {
+          order_id: trxId,
+          phone: order.phone_number,
+          service: serviceName,
+          provider: "sms_1",
+          server: "sms_1",
+          server_label: "Server 1 (SMS)",
+          price,
+          balance_after: db.getCoin(uid),
+          expires_at: new Date(expiryMs).toISOString(),
+          status: "waiting",
+        },
+      });
+    }
+
     if (provider === "herosms") {
       if (!country_id) {
         return res.status(400).json({
@@ -485,20 +723,37 @@ router.post("/order", authMiddleware, async (req, res) => {
           error: { code: "DEDUCT_FAILED", message: "Gagal memotong saldo." },
         });
       }
+      await db.persistUser(uid);
       order = await herosms.createOrder(service_id, country_id, operator_id);
       if (!order?.order_id || !order.phone_number) {
         db.addCoin(uid, price);
+        await db.persistUser(uid);
         return res.status(502).json({
           success: false,
           error: { code: "ORDER_FAILED", message: herosms.getLastError() || "Gagal order nomor SMS." },
         });
       }
       const trxId = db.addTransaction({
-        userId: uid, username: "api_user", orderId: order.order_id,
+        userId: uid, username: apiUsername, orderId: order.order_id,
         phone: order.phone_number, productName: serviceName, negara: country_id,
         harga: price, provider: "herosms", serviceId: service_id,
         countryId: country_id, operatorId: operator_id || "", providerPrice,
       });
+
+      const expiryMs = Date.now() + 20 * 60 * 1000;
+      const newSess = {
+        userId: uid,
+        step: "tunggu_otp", status: "waiting", providerStatus: "waiting",
+        provider: "herosms", createdAt: new Date().toISOString(),
+        serviceId: service_id, serviceName, hargaUser: price, providerPrice,
+        orderId: order.order_id, token: order.order_id,
+        phone: order.phone_number, expiresAt: expiryMs, cancelAt: 0, retryCount: 0,
+        trxId, sessionKey: trxId, source: "api", verificationType: "sms",
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
+      }
 
       return res.status(201).json({
         success: true,
@@ -506,11 +761,12 @@ router.post("/order", authMiddleware, async (req, res) => {
           order_id: trxId,
           phone: order.phone_number,
           service: serviceName,
-          provider: "sms_1",
-          server: "sms_1",
-          server_label: "Server 1 (SMS)",
+          provider: "sms_2",
+          server: "sms_2",
+          server_label: "Server 2 (SMS - FlashCall)",
           price,
           balance_after: db.getCoin(uid),
+          expires_at: new Date(expiryMs).toISOString(),
           status: "waiting",
         },
       });
@@ -520,16 +776,18 @@ router.post("/order", authMiddleware, async (req, res) => {
       if (!country_id) {
         return res.status(400).json({
           success: false,
-          error: { code: "MISSING_FIELD", message: "Field 'country_id' wajib untuk layanan SMS." },
+          error: { code: "MISSING_FIELD", message: "Field 'country_id' wajib untuk layanan FlashCall / SMS." },
         });
       }
-      serviceName = `SMS - ${service_id}`;
-      // Get price from rumahotp services
-      const roServices = await rumahotp.getServices();
-      const roSvc = Array.isArray(roServices)
-        ? roServices.find((s) => String(s.id) === String(service_id))
-        : null;
-      providerPrice = roSvc?.price || 0;
+      const price_info = await herosms.getPrices(service_id, country_id);
+      if (!price_info) {
+        return res.status(404).json({
+          success: false,
+          error: { code: "SERVICE_NOT_FOUND", message: "Layanan atau negara tidak ditemukan." },
+        });
+      }
+      providerPrice = herosms.toIdrPrice(price_info.price || price_info.cost || 0);
+      serviceName = `FlashCall - ${service_id}`;
       const price = db.calculatePrice("rumahotp", providerPrice, service_id, uid);
       const coin = db.getCoin(uid);
       if (coin < price) {
@@ -550,32 +808,57 @@ router.post("/order", authMiddleware, async (req, res) => {
           error: { code: "DEDUCT_FAILED", message: "Gagal memotong saldo." },
         });
       }
-      order = await rumahotp.buyNumber(service_id, country_id, operator_id);
-      if (!order?.order_id || !order.phone) {
+      await db.persistUser(uid);
+      order = await herosms.createOrder({
+        serviceId: service_id,
+        countryId: country_id,
+        operatorId: operator_id,
+        verification: true,
+        verificationType: "flashcall",
+      });
+      if (!order?.order_id || !order.phone_number) {
         db.addCoin(uid, price);
+        await db.persistUser(uid);
         return res.status(502).json({
           success: false,
-          error: { code: "ORDER_FAILED", message: rumahotp.getLastError() || "Gagal order nomor SMS." },
+          error: { code: "ORDER_FAILED", message: herosms.getLastError() || "Gagal order nomor FlashCall." },
         });
       }
       const trxId = db.addTransaction({
-        userId: uid, username: "api_user", orderId: order.order_id,
-        phone: order.phone, productName: serviceName, negara: country_id,
+        userId: uid, username: apiUsername, orderId: order.order_id,
+        phone: order.phone_number, productName: serviceName, negara: country_id,
         harga: price, provider: "rumahotp", serviceId: service_id,
         countryId: country_id, operatorId: operator_id || "", providerPrice,
       });
+
+      const expiryMs = Date.now() + 20 * 60 * 1000;
+      const newSess = {
+        userId: uid,
+        step: "tunggu_otp", status: "waiting", providerStatus: "waiting",
+        provider: "rumahotp", createdAt: new Date().toISOString(),
+        serviceId: service_id, serviceName, hargaUser: price, providerPrice,
+        orderId: order.order_id, token: order.order_id,
+        phone: order.phone_number, expiresAt: expiryMs, cancelAt: 0, retryCount: 0,
+        trxId, sessionKey: trxId, source: "api", verificationType: "flashcall",
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
+      }
 
       return res.status(201).json({
         success: true,
         data: {
           order_id: trxId,
-          phone: order.phone,
+          phone: order.phone_number,
           service: serviceName,
           provider: "sms_2",
           server: "sms_2",
-          server_label: "Server 2 (SMS)",
+          server_label: "Server 2 (SMS - FlashCall + SMS)",
+          verification_type: "flashcall",
           price,
           balance_after: db.getCoin(uid),
+          expires_at: new Date(expiryMs).toISOString(),
           status: "waiting",
         },
       });
@@ -620,15 +903,18 @@ router.get("/order/:id", authMiddleware, async (req, res) => {
           let result;
           if (sess.provider === "engineunicorn") {
             result = await engineunicorn.checkSms(sess.token || sess.orderId, sess.orderId);
-          } else if (sess.provider === "herosms") {
-            result = await herosms.getOrder(sess.orderId);
+          } else if (sess.provider === "fastbit") {
+            result = await fastbit.getOrder(sess.orderId || sess.orderUuid);
             if (result) {
               otp = result.otp_code || "";
               smsMessage = result.sms || "";
-              if (otp) status = "completed";
+              if (otp || result.status === "received") status = "completed";
+              else if (["canceled", "cancelled", "failed", "expired"].includes(result.status)) {
+                status = result.status;
+              }
             }
-          } else if (sess.provider === "rumahotp") {
-            result = await rumahotp.getOrder(sess.orderId);
+          } else if (sess.provider === "herosms" || sess.provider === "rumahotp" || sess.provider === "flashcall") {
+            result = await herosms.getOrder(sess.orderId);
             if (result) {
               otp = result.otp_code || "";
               smsMessage = result.sms || "";
@@ -648,6 +934,51 @@ router.get("/order/:id", authMiddleware, async (req, res) => {
             }
           }
         } catch (e) {}
+      }
+
+      if (otp) {
+        status = "completed";
+        if (!sess.notifiedRealtime) {
+          sess.notifiedRealtime = true;
+          sess.hasReceivedOtp = true;
+          sess.lastOtp = otp;
+          sess.status = "completed";
+          sess.paidAt = sess.paidAt || new Date().toISOString();
+          wahubSessionDb.set(uid, sess);
+
+          if (typeof apiCallbacks.sendRealtimeOtp === "function") {
+            try {
+              apiCallbacks.sendRealtimeOtp({
+                serviceName: sess.serviceName,
+                phone: sess.phone,
+                otp: otp,
+                trxId: sess.trxId || orderId,
+              });
+            } catch (e) {
+              console.error("[sendRealtimeOtp error]:", e.message);
+            }
+          }
+          if (typeof apiCallbacks.sendOrderReport === "function") {
+            try {
+              const userObj = db.getUser(uid);
+              const username = userObj?.username || `api_user_${uid}`;
+              const isWa = ["wahub", "engineunicorn"].includes(sess.provider);
+              apiCallbacks.sendOrderReport({
+                type: isWa ? "WHATSAPP" : "SMS",
+                username,
+                userId: uid,
+                serviceName: sess.serviceName,
+                phone: sess.phone,
+                harga: sess.hargaUser,
+                modal: sess.providerPrice || sess.hargaDasar || 0,
+                otp: otp,
+                serverName: getProviderLabel(sess.provider || "wahub"),
+              }).catch(() => {});
+            } catch (e) {
+              console.error("[sendOrderReport error]:", e.message);
+            }
+          }
+        }
       }
 
       return res.json({
@@ -735,10 +1066,10 @@ router.post("/order/:id/cancel", authMiddleware, async (req, res) => {
     if (sess.provider === "engineunicorn") {
       const result = await engineunicorn.cancel(sess.orderId);
       cancelled = result?.confirmed;
-    } else if (sess.provider === "herosms") {
+    } else if (sess.provider === "fastbit") {
+      cancelled = await fastbit.cancelOrder(sess.orderId || sess.orderUuid);
+    } else if (sess.provider === "herosms" || sess.provider === "rumahotp" || sess.provider === "flashcall") {
       cancelled = await herosms.cancelOrder(sess.orderId);
-    } else if (sess.provider === "rumahotp") {
-      cancelled = await rumahotp.cancelOrder(sess.orderId);
     } else {
       const result = await wahub.cancel(sess.orderId, sess.token);
       cancelled = result?.ok;
@@ -746,6 +1077,7 @@ router.post("/order/:id/cancel", authMiddleware, async (req, res) => {
 
     // Refund
     const refundResult = db.refundTransaction(sess.trxId, uid);
+    await db.persistUser(uid);
     const refunded = refundResult?.refunded || refundResult?.alreadyRefunded || false;
     const refundAmount = refundResult?.amount || sess.hargaUser || 0;
 
@@ -883,7 +1215,13 @@ router.get("/history", authMiddleware, (req, res) => {
 // ══════════════════════════════════════════════════════════════
 // CREATE & START EXPRESS APP
 // ══════════════════════════════════════════════════════════════
-function createApiServer() {
+function createApiServer(options = {}) {
+  apiCallbacks = {
+    onOrderCreated: options.onOrderCreated || null,
+    sendRealtimeOtp: options.sendRealtimeOtp || null,
+    sendOrderReport: options.sendOrderReport || null,
+  };
+
   const app = express();
 
   // Global middleware
