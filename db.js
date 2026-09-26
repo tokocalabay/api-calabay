@@ -234,7 +234,7 @@ async function persistSettingsToMongo(d) {
         reseller: d.settings.reseller,
         totalRevenue: d.totalRevenue,
       },
-      { upsert: true, new: true }
+      { upsert: true, returnDocument: 'after' }
     );
   } catch (err) {
     console.error("⚠️ [MongoDB] persistSettings error:", err.message);

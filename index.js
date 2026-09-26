@@ -4702,8 +4702,8 @@ Top up dulu!</blockquote>`,
   }
 
   sess.server = "fastbit";
-  sess.orderId = orderId;
-  sess.orderUuid = orderId;
+  sess.orderId = order.order_uuid || orderId;
+  sess.orderUuid = order.order_uuid || orderId;
   sess.phone = phone;
   sess.step = "tunggu_otp";
   sess.cancelAt = Date.now() + 3 * 60 * 1000;
@@ -4742,7 +4742,7 @@ OTP akan otomatis dikirim ke sini!
       [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}`)],
     ]).reply_markup,
   });
-  pollFastbit(uid, orderId, phone, sess);
+  pollFastbit(uid, sess.orderUuid || orderId, phone, sess);
 });
 
 // ── Beli server 2 pakai coin ──────────────────────────────
@@ -6389,7 +6389,7 @@ bot.action(/^cancel_order_(\d+)$/, async (ctx) => {
 
   try {
     const cancelResult = sess.server === "fastbit"
-      ? await cancelFastbitOrder(sess.orderId || sess.orderUuid)
+      ? await cancelFastbitOrder(sess.orderUuid || sess.orderId)
       : sess.server === "herosms"
       ? await cancelHeroSmsOrder(sess.orderId)
       : sess.server === "rumahotp"
