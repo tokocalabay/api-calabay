@@ -1480,6 +1480,7 @@ function removeMandatoryJoin(identifier) {
 // EXPORTS
 // ══════════════════════════════════════════════════════════════
 module.exports = {
+  load, save,
   connectMongo, isMongoReady, syncUser, persistUser,
   registerUser, getTotalUsers, getTotalTrx, getTotalRevenue, getUser,
   getUsers, findUserByUsername, getTransactions,

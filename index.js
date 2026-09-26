@@ -4646,8 +4646,7 @@ Top up dulu!</blockquote>`,
   let order;
   try {
     order = await fastbit.createOrder({
-      serviceId: sess.otpServiceId || sess.serviceId,
-      countryId: sess.countryId,
+      otpServiceId: sess.otpServiceId || sess.serviceId,
     });
   } catch (error) {
     db.addCoin(uid, sess.hargaUser);
@@ -5442,16 +5441,15 @@ bot.action(/^wahub_change_num_(\d+)(?:_(.+))?$/, async (ctx) => {
     const current = getWahubSession(uid, sessionKey || sess.sessionKey) || sess;
     if (isWahubPaidSession(current)) {
       stopWahubPoll(`${String(uid)}:${oldSessionKey}`);
-      return ctx.answerCbQuery(
-        "❌ Ganti nomor ditolak. OTP sudah diterima dan coin tidak dapat dikembalikan.",
-        { show_alert: true }
-      );
+      const paidText = "<blockquote>❌ Ganti nomor ditolak. OTP sudah diterima dan coin tidak dapat dikembalikan.</blockquote>";
+      return ctx.editMessageText(paidText, { parse_mode: "HTML" }).catch(() => ctx.replyWithHTML(paidText));
     }
 
     // 1. Batalkan nomor lama di provider
     const cancelResult = await cancelWahubOrder(oldOrderId, sess);
     if (!cancelResult.confirmed) {
-      return ctx.answerCbQuery("❌ Pembatalan nomor lama belum dikonfirmasi provider. Coba lagi.", { show_alert: true });
+      const cancelFailText = "<blockquote>❌ Pembatalan nomor lama belum dikonfirmasi provider. Coba lagi.</blockquote>";
+      return ctx.editMessageText(cancelFailText, { parse_mode: "HTML" }).catch(() => ctx.replyWithHTML(cancelFailText));
     }
     stopWahubPoll(`${String(uid)}:${oldSessionKey}`);
 
