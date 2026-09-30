@@ -127,7 +127,7 @@ function isWahubWaitingSession(sess) {
 }
 
 function isWahubPaidSession(sess) {
-  const hasOtp = Boolean(sess?.lastOtp || sess?.firstOtp || sess?.otp);
+  const hasOtp = Boolean(sess?.lastOtp || sess?.firstOtp || sess?.otp || sess?.hasReceivedOtp || sess?.otpCode);
   if (!hasOtp) return false;
   return true;
 }
@@ -230,6 +230,26 @@ async function cancelWahubOrder(orderId, sess) {
       return { confirmed: true, response: res?.response || res };
     }
     return { confirmed: Boolean(res?.confirmed), response: res };
+  }
+
+  if (sess?.provider === "fastbit") {
+    const res = await cancelFastbitOrder(sess.orderUuid || sess.orderId || orderId);
+    return { confirmed: Boolean(res), response: res };
+  }
+
+  if (sess?.provider === "herosms") {
+    const res = await cancelHeroSmsOrder(sess.orderId || orderId);
+    return { confirmed: Boolean(res), response: res };
+  }
+
+  if (sess?.provider === "rumahotp") {
+    const res = await cancelRumahOtpOrder(sess.orderId || orderId);
+    return { confirmed: Boolean(res), response: res };
+  }
+
+  if (sess?.provider === "otpcepat") {
+    const res = await otpcepat.cancelOrder(sess.orderId || orderId).catch(() => null);
+    return { confirmed: Boolean(res), response: res };
   }
 
   const token = sess?.token || null;
@@ -3284,7 +3304,12 @@ function pollFastbit(uid, orderUuid, phone, sess) {
 
   const iv = setInterval(async () => {
     if (found) return clearInterval(iv);
-    if (sessions[uid] !== sess || sess.step !== "tunggu_otp") {
+    if (sess.isCancelled || sess.cancelled || sess.step === "selesai" || sess.step === "cancelled") {
+      found = true;
+      return clearInterval(iv);
+    }
+    const currentDbSess = wahubSessionDb.find(uid, sess.trxId || orderUuid);
+    if (currentDbSess && ["paid", "completed", "cancelled", "expired", "failed"].includes(currentDbSess.status)) {
       found = true;
       return clearInterval(iv);
     }
@@ -3294,8 +3319,14 @@ function pollFastbit(uid, orderUuid, phone, sess) {
       if (found) return;
       found = true;
       sess.cancelProcessing = true;
-      await cancelFastbitOrder(orderUuid);
+      sess.step = "selesai";
+      await cancelFastbitOrder(orderUuid).catch(() => {});
       refundFastbitOrder(uid, sess);
+      if (currentDbSess) {
+        currentDbSess.status = "expired";
+        currentDbSess.step = "selesai";
+        wahubSessionDb.set(uid, currentDbSess);
+      }
       await bot.telegram.sendMessage(
         uid,
         `<blockquote>⚠️ <b>OTP tidak masuk dalam 20 menit.</b>
@@ -3304,7 +3335,9 @@ Coin dikembalikan.
 🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
         { parse_mode: "HTML" }
       ).catch(() => {});
-      delete sessions[uid];
+      if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+        delete sessions[uid];
+      }
       return;
     }
 
@@ -3312,11 +3345,30 @@ Coin dikembalikan.
       const order = await fastbit.getOrder(orderUuid);
       if (!order) return;
 
-      const otpCode = order.otp_code;
+      // Try otp_code first, then fallback to extracting from SMS text
+      let otpCode = order.otp_code;
+      if (!otpCode && order.sms) {
+        otpCode = extractOtp(order.sms);
+      }
+      // If has_sms is true but we still have no code, log for debugging
+      if (!otpCode && order.has_sms) {
+        console.log("[FastBit poll] has_sms=true but no OTP extracted. sms:", JSON.stringify(order.sms), "raw:", JSON.stringify(order.raw?.sms ?? order.raw?.messages));
+      }
       if (otpCode) {
         found = true;
         clearInterval(iv);
+        sess.step = "selesai";
+        sess.hasReceivedOtp = true;
+        sess.otpCode = otpCode;
         fastbit.finishOrder(orderUuid).catch(() => {});
+
+        if (currentDbSess) {
+          currentDbSess.status = "completed";
+          currentDbSess.step = "selesai";
+          currentDbSess.lastOtp = otpCode;
+          currentDbSess.hasReceivedOtp = true;
+          wahubSessionDb.set(uid, currentDbSess);
+        }
 
         await bot.telegram.sendMessage(
           uid,
@@ -3358,7 +3410,9 @@ Coin dikembalikan.
           serverName: "Server 1 (SMS)",
         }).catch(() => {});
 
-        delete sessions[uid];
+        if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+          delete sessions[uid];
+        }
         checkResellerPromotion(bot, uid).catch(() => {});
         return;
       }
@@ -3367,7 +3421,13 @@ Coin dikembalikan.
       if (["canceled", "cancelled", "cancel", "failed", "expired"].includes(status)) {
         clearInterval(iv);
         found = true;
+        sess.step = "selesai";
         refundFastbitOrder(uid, sess);
+        if (currentDbSess) {
+          currentDbSess.status = "cancelled";
+          currentDbSess.step = "selesai";
+          wahubSessionDb.set(uid, currentDbSess);
+        }
         await bot.telegram.sendMessage(
           uid,
           `<blockquote>⚠️ Order ${escapeHTML(order.status)}.
@@ -3375,7 +3435,9 @@ Coin dikembalikan.
 🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
           { parse_mode: "HTML" }
         ).catch(() => {});
-        delete sessions[uid];
+        if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+          delete sessions[uid];
+        }
       }
     } catch (error) {
       console.error("FastBit poll error:", error.message);
@@ -4579,8 +4641,31 @@ OTP akan otomatis dikirim ke sini!
   sess.orderMsgId = await updateOrderMessage(ctx, loadMsg, successText, {
     parse_mode: "HTML",
     reply_markup: Markup.inlineKeyboard([
-      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}`)],
+      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}_${trxId || orderId}`)],
     ]).reply_markup
+  });
+
+  wahubSessionDb.set(uid, {
+    userId: uid,
+    sessionKey: trxId || orderId,
+    trxId,
+    orderId,
+    provider: "otpcepat",
+    server: "otpcepat",
+    phone,
+    serviceName: sess.countryName || "OTP Cepat",
+    countryName: sess.countryName || "",
+    hargaUser: sess.hargaUser,
+    hargaDasar: sess.hargaAsli || sess.hargaUser,
+    providerPrice: sess.hargaAsli || sess.hargaUser,
+    step: "tunggu_otp",
+    status: "waiting",
+    providerStatus: "waiting",
+    expiresAt: Date.now() + OTP_WAIT_MS,
+    cancelAt: sess.cancelAt,
+    orderMsgId: loadMsg.message_id,
+    chatId: ctx.chat.id,
+    createdAt: new Date().toISOString(),
   });
 
   sess.testimoniData = {
@@ -4735,11 +4820,36 @@ OTP akan otomatis dikirim ke sini!
 
 ⚠️ Tombol batalkan aktif setelah 3 menit.</blockquote>`;
 
+  wahubSessionDb.set(uid, {
+    userId: uid,
+    sessionKey: trxId || sess.orderUuid || orderId,
+    trxId,
+    orderId: sess.orderUuid || orderId,
+    orderUuid: sess.orderUuid || orderId,
+    provider: "fastbit",
+    server: "fastbit",
+    phone,
+    serviceName: sess.serviceName,
+    countryName: sess.countryName,
+    operatorName: sess.operatorName || "Semua Operator",
+    hargaUser: sess.hargaUser,
+    hargaDasar: sess.hargaDasar,
+    providerPrice: sess.hargaDasar,
+    step: "tunggu_otp",
+    status: "waiting",
+    providerStatus: "waiting",
+    expiresAt: Date.now() + OTP_WAIT_MS,
+    cancelAt: sess.cancelAt,
+    orderMsgId: loadMsg.message_id,
+    chatId: ctx.chat.id,
+    createdAt: new Date().toISOString(),
+  });
+
   sess.orderMsgId = await updateOrderMessage(ctx, loadMsg, successText, {
     parse_mode: "HTML",
     reply_markup: Markup.inlineKeyboard([
       [copyPhoneButton(phone)],
-      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}`)],
+      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}_${trxId || sess.orderUuid || orderId}`)],
     ]).reply_markup,
   });
   pollFastbit(uid, sess.orderUuid || orderId, phone, sess);
@@ -4905,11 +5015,35 @@ ${methodText}🌍 Negara: <b>${escapeHTML(sess.countryName)}</b>
 ${instructText}
 
 ⚠️ Tombol batalkan aktif setelah 3 menit.</blockquote>`;
+  wahubSessionDb.set(uid, {
+    userId: uid,
+    sessionKey: trxId || orderId,
+    trxId,
+    orderId,
+    provider: "herosms",
+    server: "herosms",
+    phone,
+    serviceName: sess.serviceName,
+    countryName: sess.countryName,
+    operatorName: sess.operatorName || "",
+    hargaUser: sess.hargaUser,
+    hargaDasar: sess.hargaAsli || sess.hargaUser,
+    providerPrice: sess.hargaAsli || sess.hargaUser,
+    step: "tunggu_otp",
+    status: "waiting",
+    providerStatus: "waiting",
+    expiresAt: Date.now() + OTP_WAIT_MS,
+    cancelAt: sess.cancelAt,
+    orderMsgId: loadMsg.message_id,
+    chatId: ctx.chat.id,
+    createdAt: new Date().toISOString(),
+  });
+
   sess.orderMsgId = await updateOrderMessage(ctx, loadMsg, successText, {
     parse_mode: "HTML",
     reply_markup: Markup.inlineKeyboard([
       [copyPhoneButton(phone)],
-      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}`)],
+      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}_${trxId || orderId}`)],
     ]).reply_markup,
   });
   pollHeroSms(uid, orderId, phone, sess);
@@ -5033,11 +5167,35 @@ OTP akan otomatis dikirim ke sini!
 
 ⚠️ Tombol batalkan aktif setelah 3 menit.</blockquote>`;
 
+  wahubSessionDb.set(uid, {
+    userId: uid,
+    sessionKey: trxId || orderId,
+    trxId,
+    orderId,
+    provider: "rumahotp",
+    server: "rumahotp",
+    phone,
+    serviceName: sess.serviceName,
+    countryName: sess.countryName,
+    operatorName: sess.operatorName || "Otomatis",
+    hargaUser: sess.hargaUser,
+    hargaDasar: sess.hargaDasar,
+    providerPrice: sess.hargaDasar,
+    step: "tunggu_otp",
+    status: "waiting",
+    providerStatus: "waiting",
+    expiresAt: Date.now() + OTP_WAIT_MS,
+    cancelAt: sess.cancelAt,
+    orderMsgId: loadMsg.message_id,
+    chatId: ctx.chat.id,
+    createdAt: new Date().toISOString(),
+  });
+
   sess.orderMsgId = await updateOrderMessage(ctx, loadMsg, successText, {
     parse_mode: "HTML",
     reply_markup: Markup.inlineKeyboard([
       [copyPhoneButton(phone)],
-      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}`)],
+      [Markup.button.callback("🚫 Batalkan Order", `cancel_order_${uid}_${trxId || orderId}`)],
     ]).reply_markup,
   });
   pollRumahOtpSession(uid, orderId, phone, sess);
@@ -5875,7 +6033,12 @@ function pollHeroSms(uid, orderId, phone, sess) {
 
   const iv = setInterval(async () => {
     if (found) return clearInterval(iv);
-    if (sessions[uid] !== sess || sess.step !== "tunggu_otp") {
+    if (sess.isCancelled || sess.cancelled || sess.step === "selesai" || sess.step === "cancelled") {
+      found = true;
+      return clearInterval(iv);
+    }
+    const currentDbSess = wahubSessionDb.find(uid, sess.trxId || orderId);
+    if (currentDbSess && ["paid", "completed", "cancelled", "expired", "failed"].includes(currentDbSess.status)) {
       found = true;
       return clearInterval(iv);
     }
@@ -5885,7 +6048,8 @@ function pollHeroSms(uid, orderId, phone, sess) {
       if (found) return;
       found = true;
       sess.cancelProcessing = true;
-       const cancelResult = await cancelHeroSmsOrder(orderId);
+      sess.step = "selesai";
+      const cancelResult = await cancelHeroSmsOrder(orderId);
       if (cancelResult === null) {
         sess.cancelProcessing = false;
         found = false;
@@ -5899,7 +6063,12 @@ Silakan tekan tombol batalkan lagi.</blockquote>`,
         return;
       }
 
-       refundHeroSmsOrder(uid, sess);
+      refundHeroSmsOrder(uid, sess);
+      if (currentDbSess) {
+        currentDbSess.status = "expired";
+        currentDbSess.step = "selesai";
+        wahubSessionDb.set(uid, currentDbSess);
+      }
       await bot.telegram.sendMessage(
         uid,
 `<blockquote>⚠️ <b>OTP tidak masuk dalam 20 menit.</b>
@@ -5908,12 +6077,14 @@ Coin dikembalikan.
 🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
         { parse_mode: "HTML" }
       ).catch(() => {});
-      delete sessions[uid];
+      if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+        delete sessions[uid];
+      }
       return;
     }
 
     try {
-       const order = await herosms.getOrder(orderId);
+      const order = await herosms.getOrder(orderId);
       if (!order) return;
 
       // Jangan menganggap pesan informasi seperti "Silahkan copy..." sebagai OTP.
@@ -5923,6 +6094,9 @@ Coin dikembalikan.
       if (hasOtp) {
         found = true;
         clearInterval(iv);
+        sess.step = "selesai";
+        sess.hasReceivedOtp = true;
+        sess.otpCode = otpCode;
         const isFlashcall = sess.smsServer === 2 || sess.verificationType === "flashcall" || Boolean(order.is_call);
         const otpTitle = order.is_call ? "📞 <b>FLASHCALL / PANGGILAN MASUK!</b>" : "🔑 <b>OTP MASUK!</b>";
         const methodLine = order.is_call
@@ -5930,6 +6104,14 @@ Coin dikembalikan.
           : isFlashcall
           ? "⚡ Metode: <b>📞 FlashCall + 📩 SMS</b>\n"
           : "⚡ Metode: <b>📩 SMS</b>\n";
+
+        if (currentDbSess) {
+          currentDbSess.status = "completed";
+          currentDbSess.step = "selesai";
+          currentDbSess.lastOtp = otpCode;
+          currentDbSess.hasReceivedOtp = true;
+          wahubSessionDb.set(uid, currentDbSess);
+        }
 
         await bot.telegram.sendMessage(
           uid,
@@ -5969,7 +6151,9 @@ ${methodLine}🔑 Kode: <code>${otpCode}</code>
           otp: otpCode,
           serverName: serverReportName,
         }).catch(() => {});
-        delete sessions[uid];
+        if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+          delete sessions[uid];
+        }
         checkResellerPromotion(bot, uid).catch(() => {});
         return;
       }
@@ -5978,7 +6162,13 @@ ${methodLine}🔑 Kode: <code>${otpCode}</code>
       if (["canceled", "cancelled", "cancel", "expired", "expiring"].includes(status)) {
         clearInterval(iv);
         found = true;
+        sess.step = "selesai";
         refundHeroSmsOrder(uid, sess);
+        if (currentDbSess) {
+          currentDbSess.status = "cancelled";
+          currentDbSess.step = "selesai";
+          wahubSessionDb.set(uid, currentDbSess);
+        }
         await bot.telegram.sendMessage(
           uid,
 `<blockquote>⚠️ Order ${escapeHTML(order.status)}.
@@ -5986,7 +6176,9 @@ Coin dikembalikan.
 🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
           { parse_mode: "HTML" }
         ).catch(() => {});
-        delete sessions[uid];
+        if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+          delete sessions[uid];
+        }
       }
     } catch (error) {
       console.error("Server 2 poll error:", error.message);
@@ -6018,7 +6210,12 @@ function pollRumahOtpSession(uid, orderId, phone, sess) {
 
   const iv = setInterval(async () => {
     if (found) return clearInterval(iv);
-    if (sessions[uid] !== sess || sess.step !== "tunggu_otp") {
+    if (sess.isCancelled || sess.cancelled || sess.step === "selesai" || sess.step === "cancelled") {
+      found = true;
+      return clearInterval(iv);
+    }
+    const currentDbSess = wahubSessionDb.find(uid, sess.trxId || orderId);
+    if (currentDbSess && ["paid", "completed", "cancelled", "expired", "failed"].includes(currentDbSess.status)) {
       found = true;
       return clearInterval(iv);
     }
@@ -6028,6 +6225,7 @@ function pollRumahOtpSession(uid, orderId, phone, sess) {
       if (found) return;
       found = true;
       sess.cancelProcessing = true;
+      sess.step = "selesai";
       const cancelResult = await cancelRumahOtpOrder(orderId);
       if (cancelResult === null) {
         sess.cancelProcessing = false;
@@ -6043,6 +6241,11 @@ Silakan tekan tombol batalkan lagi.</blockquote>`,
       }
 
       refundRumahOtpOrder(uid, sess);
+      if (currentDbSess) {
+        currentDbSess.status = "expired";
+        currentDbSess.step = "selesai";
+        wahubSessionDb.set(uid, currentDbSess);
+      }
       await bot.telegram.sendMessage(
         uid,
 `<blockquote>⚠️ <b>OTP tidak masuk dalam 20 menit.</b>
@@ -6051,7 +6254,9 @@ Coin dikembalikan.
 🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
         { parse_mode: "HTML" }
       ).catch(() => {});
-      delete sessions[uid];
+      if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+        delete sessions[uid];
+      }
       return;
     }
 
@@ -6064,6 +6269,18 @@ Coin dikembalikan.
       if (hasOtp) {
         found = true;
         clearInterval(iv);
+        sess.step = "selesai";
+        sess.hasReceivedOtp = true;
+        sess.otpCode = otpCode;
+
+        if (currentDbSess) {
+          currentDbSess.status = "completed";
+          currentDbSess.step = "selesai";
+          currentDbSess.lastOtp = otpCode;
+          currentDbSess.hasReceivedOtp = true;
+          wahubSessionDb.set(uid, currentDbSess);
+        }
+
         await bot.telegram.sendMessage(
           uid,
           `<blockquote>🔑 <b>OTP MASUK!</b>
@@ -6101,7 +6318,9 @@ Coin dikembalikan.
           otp: otpCode,
           serverName: "Server 2 (SMS)",
         }).catch(() => {});
-        delete sessions[uid];
+        if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+          delete sessions[uid];
+        }
         checkResellerPromotion(bot, uid).catch(() => {});
         return;
       }
@@ -6110,7 +6329,13 @@ Coin dikembalikan.
       if (["canceled", "cancelled", "cancel", "expired", "failed"].includes(status)) {
         clearInterval(iv);
         found = true;
+        sess.step = "selesai";
         refundRumahOtpOrder(uid, sess);
+        if (currentDbSess) {
+          currentDbSess.status = "cancelled";
+          currentDbSess.step = "selesai";
+          wahubSessionDb.set(uid, currentDbSess);
+        }
         await bot.telegram.sendMessage(
           uid,
 `<blockquote>⚠️ Order ${escapeHTML(order.status)}.
@@ -6118,7 +6343,9 @@ Coin dikembalikan.
 🪙 Coin kamu: <b>${rupiah(db.getCoin(uid))}</b></blockquote>`,
           { parse_mode: "HTML" }
         ).catch(() => {});
-        delete sessions[uid];
+        if (sessions[uid]?.trxId === sess.trxId || sessions[uid] === sess) {
+          delete sessions[uid];
+        }
       }
     } catch (error) {
       console.error("Server 2 (RumahOTP) poll error:", error.message);
@@ -6178,9 +6405,11 @@ function pollApiSmsOrder(sess) {
 
       if (current.provider === "fastbit") {
         orderData = await fastbit.getOrder(current.orderId || current.orderUuid);
-        if (orderData?.otp_code) {
-          otpCode = orderData.otp_code;
-          fastbit.finishOrder(current.orderId || current.orderUuid).catch(() => {});
+        if (orderData) {
+          otpCode = orderData.otp_code || extractOtp(orderData.sms);
+          if (otpCode) {
+            fastbit.finishOrder(current.orderId || current.orderUuid).catch(() => {});
+          }
         }
       } else if (current.provider === "herosms" || current.provider === "rumahotp") {
         orderData = await herosms.getOrder(current.orderId);
@@ -6229,11 +6458,28 @@ function pollApiSmsOrder(sess) {
           }).catch(() => {});
         }
 
-        bot.telegram.sendMessage(
-          uid,
-          `<blockquote>🔑 <b>OTP MASUK! (API)</b>\n━━━━━━━━━━━━━━━━\n📱 Nomor: <code>${escapeHTML(current.phone)}</code>\n🔑 Kode: <code>${escapeHTML(otpCode)}</code>\n🧾 TRX ID: <code>${escapeHTML(current.trxId || "-")}</code>\n━━━━━━━━━━━━━━━━</blockquote>`,
-          { parse_mode: "HTML" }
-        ).catch(() => {});
+        if (current.source === "bot") {
+          bot.telegram.sendMessage(
+            uid,
+            `<blockquote>🔑 <b>OTP MASUK!</b>\n━━━━━━━━━━━━━━━━\n📱 Nomor: <code>${escapeHTML(current.phone)}</code>\n⚡ Metode: <b>📩 SMS Biasa</b>\n🔑 Kode: <code>${escapeHTML(otpCode)}</code>\n━━━━━━━━━━━━━━━━</blockquote>`,
+            {
+              parse_mode: "HTML",
+              reply_markup: {
+                inline_keyboard: [
+                  [copyOtpButton(otpCode)],
+                  [{ text: "✅ Pesanan Berhasil", callback_data: `order_done_${uid}_${current.trxId || current.orderId}` }],
+                  ...(current.trxId ? [[{ text: "🛒 Order Lagi", callback_data: `order_again_${uid}_${current.trxId}` }]] : []),
+                ],
+              },
+            }
+          ).catch(() => {});
+        } else {
+          bot.telegram.sendMessage(
+            uid,
+            `<blockquote>🔑 <b>OTP MASUK! (API)</b>\n━━━━━━━━━━━━━━━━\n📱 Nomor: <code>${escapeHTML(current.phone)}</code>\n🔑 Kode: <code>${escapeHTML(otpCode)}</code>\n🧾 TRX ID: <code>${escapeHTML(current.trxId || "-")}</code>\n━━━━━━━━━━━━━━━━</blockquote>`,
+            { parse_mode: "HTML" }
+          ).catch(() => {});
+        }
 
         return;
       }
@@ -6361,19 +6607,101 @@ bot.action(/^fm_(.+)$/, async (ctx) => {
 });
 
 // ── Cancel Order (user) ───────────────────────────────────
-bot.action(/^cancel_order_(\d+)$/, async (ctx) => {
-  const uid  = parseInt(ctx.match[1]);
+bot.action(/^cancel_order_(\d+)(?:_(.+))?$/, async (ctx) => {
+  const uid = parseInt(ctx.match[1]);
   if (uid !== ctx.from.id) {
     return ctx.answerCbQuery("❌ Bukan sesimu!", { show_alert: true });
   }
 
-  const sess = sessions[uid];
-  if (!sess || sess.step !== "tunggu_otp") {
-    return ctx.answerCbQuery("❌ Tidak ada order aktif.", { show_alert: true });
+  // 1. Resolve orderKey: from callback param OR from message text (for older order messages)
+  let orderKey = ctx.match[2] || null;
+  if (!orderKey && ctx.callbackQuery?.message?.text) {
+    const trxMatch = ctx.callbackQuery.message.text.match(/TRX[-_]\d+/i);
+    if (trxMatch) {
+      orderKey = trxMatch[0];
+    }
   }
 
-  if (sess.cancelAt && Date.now() < sess.cancelAt) {
-    const sisaDetik = Math.ceil((sess.cancelAt - Date.now()) / 1000);
+  // 2. Resolve session and/or transaction
+  let sess = null;
+  let trxData = null;
+
+  if (orderKey) {
+    sess = wahubSessionDb.find(uid, orderKey);
+    if (!sess && sessions[uid] && (
+      sessions[uid].trxId === orderKey ||
+      sessions[uid].orderId === orderKey ||
+      sessions[uid].orderUuid === orderKey
+    )) {
+      sess = sessions[uid];
+    }
+    trxData = db.getTrxById(orderKey);
+  }
+
+  if (!sess && sessions[uid] && sessions[uid].step === "tunggu_otp") {
+    sess = sessions[uid];
+  }
+
+  if (!sess) {
+    const allActive = wahubSessionDb.getAll(uid).filter(
+      (s) => s && (s.step === "tunggu_otp" || s.status === "waiting")
+    );
+    if (allActive.length > 0) {
+      sess = allActive[allActive.length - 1];
+    }
+  }
+
+  const effectiveTrxId = sess?.trxId || orderKey || trxData?.id;
+  if (effectiveTrxId && !trxData) {
+    trxData = db.getTrxById(effectiveTrxId);
+  }
+
+  if (!sess && !trxData) {
+    const recentTrx = db.getLastTransaction(uid);
+    if (recentTrx) {
+      const trxAge = Date.now() - new Date(recentTrx.date || recentTrx.createdAt || 0).getTime();
+      if (trxAge < 30 * 60 * 1000) {
+        trxData = recentTrx;
+      }
+    }
+  }
+
+  if (!sess && trxData) {
+    sess = {
+      server: trxData.provider || "fastbit",
+      provider: trxData.provider || "fastbit",
+      orderId: trxData.orderId,
+      orderUuid: trxData.orderId,
+      trxId: trxData.id,
+      hargaUser: trxData.harga,
+      cancelAt: new Date(trxData.date || trxData.createdAt || 0).getTime() + 3 * 60 * 1000,
+      createdAt: trxData.date || trxData.createdAt,
+    };
+  }
+
+  if (!sess && !trxData) {
+    return ctx.answerCbQuery("❌ Tidak ada order aktif yang dapat dibatalkan.", { show_alert: true });
+  }
+
+  const finalTrxId = effectiveTrxId || trxData?.id;
+  if (finalTrxId && !trxData) {
+    trxData = db.getTrxById(finalTrxId);
+  }
+
+  if (trxData && trxData.refunded) {
+    if (sessions[uid]?.trxId === finalTrxId || sessions[uid] === sess) delete sessions[uid];
+    if (finalTrxId) wahubSessionDb.remove(uid, finalTrxId);
+    return ctx.answerCbQuery("ℹ️ Order ini sudah dibatalkan dan koin sudah dikembalikan.", { show_alert: true });
+  }
+
+  if (sess?.hasReceivedOtp || sess?.lastOtp || sess?.status === "completed" || sess?.status === "paid") {
+    return ctx.answerCbQuery("❌ OTP sudah diterima, order tidak dapat dibatalkan.", { show_alert: true });
+  }
+
+  // Check 3-minute cancel delay (if within 3 minutes and order is not expired)
+  const cancelAt = sess?.cancelAt || (trxData?.date ? new Date(trxData.date).getTime() + 3 * 60 * 1000 : 0);
+  if (cancelAt && Date.now() < cancelAt) {
+    const sisaDetik = Math.ceil((cancelAt - Date.now()) / 1000);
     const sisaMenit = Math.floor(sisaDetik / 60);
     const detik = sisaDetik % 60;
     return ctx.answerCbQuery(
@@ -6382,57 +6710,74 @@ bot.action(/^cancel_order_(\d+)$/, async (ctx) => {
     );
   }
 
-  if (sess.cancelProcessing) {
+  if (sess?.cancelProcessing) {
     return ctx.answerCbQuery("⏳ Sedang diproses...", { show_alert: true });
   }
-  sess.cancelProcessing = true;
+  if (sess) sess.cancelProcessing = true;
 
   try {
-    const cancelResult = sess.server === "fastbit"
-      ? await cancelFastbitOrder(sess.orderUuid || sess.orderId)
-      : sess.server === "herosms"
-      ? await cancelHeroSmsOrder(sess.orderId)
-      : sess.server === "rumahotp"
-      ? await cancelRumahOtpOrder(sess.orderId)
-      : await otpcepat.cancelOrder(sess.orderId);
+    const provider = sess?.server || sess?.provider || trxData?.provider || "fastbit";
+    const orderRef = sess?.orderUuid || sess?.orderId || trxData?.orderId;
 
-    if (cancelResult === null) {
-      sess.cancelProcessing = false;
-      return ctx.answerCbQuery("❌ Cancel ditolak provider.", { show_alert: true });
+    if (orderRef) {
+      if (provider === "fastbit") {
+        await cancelFastbitOrder(orderRef).catch(() => null);
+      } else if (provider === "herosms") {
+        await cancelHeroSmsOrder(orderRef).catch(() => null);
+      } else if (provider === "rumahotp") {
+        await cancelRumahOtpOrder(orderRef).catch(() => null);
+      } else if (provider === "otpcepat") {
+        await otpcepat.cancelOrder(orderRef).catch(() => null);
+      }
     }
 
-    const trxData = db.getTrxById(sess.trxId);
-    if (!trxData) {
-      sess.cancelProcessing = false;
-      return ctx.answerCbQuery("❌ Data transaksi tidak ditemukan.", { show_alert: true });
-    }
-    const refundAmount = trxData.harga;
+    let refundAmount = Number(trxData?.harga || sess?.hargaUser || 0);
+    let newCoin = db.getCoin(uid);
 
-    if (trxData.refunded) {
-      sess.cancelProcessing = false;
+    if (finalTrxId) {
+      const refRes = db.refundTransaction(finalTrxId, uid);
+      if (refRes.refunded) {
+        refundAmount = refRes.amount;
+        newCoin = refRes.balance;
+      } else if (refRes.alreadyRefunded) {
+        if (sess) sess.cancelProcessing = false;
+        return ctx.answerCbQuery("ℹ️ Order ini sudah pernah direfund.", { show_alert: true });
+      } else if (trxData) {
+        db.markRefunded(finalTrxId);
+        db.addCoin(uid, refundAmount);
+        newCoin = db.getCoin(uid);
+      }
+    } else if (sess?.hargaUser) {
+      db.addCoin(uid, refundAmount);
+      newCoin = db.getCoin(uid);
+    }
+
+    if (sess) {
+      sess.isCancelled = true;
+      sess.step = "cancelled";
+      sess.status = "cancelled";
+    }
+
+    if (sessions[uid]?.trxId === finalTrxId || sessions[uid] === sess) {
       delete sessions[uid];
-      return ctx.answerCbQuery("❌ Sudah pernah direfund.", { show_alert: true });
     }
-
-    db.markRefunded(sess.trxId);
-    db.addCoin(uid, refundAmount);
-    const newCoin = db.getCoin(uid);
-
-    delete sessions[uid];
+    if (finalTrxId) {
+      wahubSessionDb.remove(uid, finalTrxId);
+    }
 
     await ctx.answerCbQuery("✅ Order berhasil dibatalkan.");
     await ctx.editMessageText(
 `<blockquote>🚫 <b>ORDER DIBATALKAN</b>
 ━━━━━━━━━━━━━━━━
-🧾 TRX ID : <code>${sess.trxId}</code>
+🧾 TRX ID : <code>${finalTrxId || "-"}</code>
 🪙 Coin dikembalikan: <b>${rupiah(refundAmount)}</b>
 💰 Sisa coin: <b>${rupiah(newCoin)}</b>
 ━━━━━━━━━━━━━━━━</blockquote>`,
       { parse_mode: "HTML" }
-    );
+    ).catch(() => {});
 
   } catch (e) {
-    sess.cancelProcessing = false;
+    if (sess) sess.cancelProcessing = false;
     console.error("cancel_order error:", e.message);
     await ctx.answerCbQuery("❌ Gagal batalkan. Coba lagi.", { show_alert: true });
   }
