@@ -7013,41 +7013,119 @@ function ownerArgs(ctx) {
   return ctx.message.text.trim().split(/\s+/).slice(1);
 }
 
-function resolveTargetUser(ctx, args) {
-  const replyMsg = ctx.message.reply_to_message;
-  if (replyMsg) {
-    const text = replyMsg.text || replyMsg.caption || "";
-    const matchId = text.match(/(?:User\s*:\s*(?:@\w+\s*)?\((\d+)\)|\((\d+)\)|ID User\s*:\s*(\d+)|<code>(\d+)<\/code>)/i);
-    const extractedId = matchId ? (matchId[1] || matchId[2] || matchId[3] || matchId[4]) : null;
-    if (extractedId && db.getUser(extractedId)) {
-      return { userId: extractedId, rest: args };
-    }
-    const repliedUserId = replyMsg.from?.id;
-    if (repliedUserId && String(repliedUserId) !== String(ctx.botInfo?.id)) {
-      return { userId: String(repliedUserId), rest: args };
-    }
+function parseAmount(input) {
+  if (typeof input === "number") return Number.isFinite(input) && input >= 0 ? Math.floor(input) : NaN;
+  if (!input || typeof input !== "string") return NaN;
+
+  let clean = input.trim().toLowerCase().replace(/\s+/g, "");
+
+  let multiplier = 1;
+  if (clean.endsWith("k") || clean.endsWith("rb")) {
+    multiplier = 1000;
+    clean = clean.replace(/(k|rb)$/, "");
+  } else if (clean.endsWith("jt") || clean.endsWith("m") || clean.endsWith("juta")) {
+    multiplier = 1000000;
+    clean = clean.replace(/(jt|m|juta)$/, "");
   }
-  const rawId = args.shift();
-  if (!rawId) return { userId: null, rest: args };
-  if (/^\d+$/.test(rawId)) return { userId: rawId, rest: args };
-  const found = db.findUserByUsername(rawId);
-  return { userId: found?.id || null, rest: args, searchedUsername: rawId };
+
+  if (multiplier > 1) {
+    clean = clean.replace(/,/g, ".");
+    const num = parseFloat(clean);
+    return Number.isFinite(num) && num >= 0 ? Math.floor(num * multiplier) : NaN;
+  }
+
+  clean = clean.replace(/^rp\.?/i, "").replace(/[.,\s]/g, "");
+  const num = Number(clean);
+  return Number.isFinite(num) && num >= 0 ? Math.floor(num) : NaN;
+}
+
+function resolveTargetUserAndAmount(ctx, args) {
+  const replyMsg = ctx.message.reply_to_message;
+  let userId = null;
+  let amount = NaN;
+  let searchedUsername = null;
+
+  // Kasus 1: Dua argumen atau lebih -> /command <target> <jumlah>
+  if (args.length >= 2) {
+    const rawTarget = args[0];
+    const amountStr = args.slice(1).join(" ");
+    amount = parseAmount(amountStr);
+
+    if (/^\d+$/.test(rawTarget)) {
+      userId = rawTarget;
+    } else {
+      const found = db.findUserByUsername(rawTarget);
+      userId = found?.id || null;
+      searchedUsername = rawTarget;
+    }
+    return { userId, amount, searchedUsername, argsCount: args.length };
+  }
+
+  // Kasus 2: Satu argumen dan me-reply pesan -> /command <jumlah>
+  if (args.length === 1 && replyMsg) {
+    amount = parseAmount(args[0]);
+    const text = replyMsg.text || replyMsg.caption || "";
+    const matchId = text.match(/(?:User\s*:\s*(?:@\w+\s*)?\((\d+)\)|\((\d+)\)|ID User\s*:\s*(\d+)|<code>(\d+)<\/code>|ID\s*:\s*<code>(\d+)<\/code>|🆔\s*ID\s*:\s*<code>(\d+)<\/code>)/i);
+    const extractedId = matchId ? (matchId[1] || matchId[2] || matchId[3] || matchId[4] || matchId[5] || matchId[6]) : null;
+    if (extractedId) {
+      userId = extractedId;
+    } else if (replyMsg.from?.id && String(replyMsg.from.id) !== String(ctx.botInfo?.id)) {
+      userId = String(replyMsg.from.id);
+    }
+    return { userId, amount, searchedUsername: null, argsCount: args.length };
+  }
+
+  // Kasus 3: Satu argumen tanpa reply -> /command <target>
+  if (args.length === 1 && !replyMsg) {
+    const rawTarget = args[0];
+    if (/^\d+$/.test(rawTarget)) {
+      userId = rawTarget;
+    } else {
+      const found = db.findUserByUsername(rawTarget);
+      userId = found?.id || null;
+      searchedUsername = rawTarget;
+    }
+    return { userId, amount: NaN, searchedUsername, argsCount: args.length };
+  }
+
+  // Kasus 4: Nol argumen dan me-reply pesan -> /trackuser
+  if (args.length === 0 && replyMsg) {
+    const text = replyMsg.text || replyMsg.caption || "";
+    const matchId = text.match(/(?:User\s*:\s*(?:@\w+\s*)?\((\d+)\)|\((\d+)\)|ID User\s*:\s*(\d+)|<code>(\d+)<\/code>|ID\s*:\s*<code>(\d+)<\/code>|🆔\s*ID\s*:\s*<code>(\d+)<\/code>)/i);
+    const extractedId = matchId ? (matchId[1] || matchId[2] || matchId[3] || matchId[4] || matchId[5] || matchId[6]) : null;
+    if (extractedId) {
+      userId = extractedId;
+    } else if (replyMsg.from?.id && String(replyMsg.from.id) !== String(ctx.botInfo?.id)) {
+      userId = String(replyMsg.from.id);
+    }
+    return { userId, amount: NaN, searchedUsername: null, argsCount: 0 };
+  }
+
+  return { userId: null, amount: NaN, searchedUsername: null, argsCount: args.length };
 }
 
 async function changeUserBalance(ctx, direction) {
   if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
-  const { userId, rest, searchedUsername } = resolveTargetUser(ctx, ownerArgs(ctx));
+  const args = ownerArgs(ctx);
+  const { userId, amount, searchedUsername } = resolveTargetUserAndAmount(ctx, args);
+
   if (searchedUsername && !userId) {
     return ctx.reply(`❌ Username ${searchedUsername} belum terdaftar di bot.`);
   }
-  const amount = Number(rest[0]);
+
   if (!userId || !Number.isFinite(amount) || amount <= 0) {
-    return ctx.reply(
-      `❌ Format: /${direction === "add" ? "addsaldo" : "delsaldo"} <userId/@username> <jumlah>\n` +
-      "Contoh: /addsaldo 123456789 50000 atau /addsaldo @username 50000\n" +
-      "Atau reply pesan deposit/user lalu kirim: /addsaldo <jumlah>"
+    const cmd = direction === "add" ? "addsaldo" : "delsaldo";
+    return ctx.replyWithHTML(
+      `<blockquote>❌ <b>Format Salah!</b>\n` +
+      `Gunakan:\n` +
+      `• <code>/${cmd} &lt;userId/@username&gt; &lt;jumlah&gt;</code>\n` +
+      `Contoh: <code>/${cmd} 123456789 50000</code> atau <code>/${cmd} @username 50k</code>\n\n` +
+      `Atau reply pesan deposit/user lalu kirim:\n` +
+      `• <code>/${cmd} &lt;jumlah&gt;</code> (Contoh: <code>/${cmd} 50000</code>)</blockquote>`
     );
   }
+
+  await db.syncUser(userId);
   let user = db.getUser(userId);
   if (!user && direction === "add" && /^\d+$/.test(userId)) {
     db.registerUser(userId, String(userId));
@@ -7061,21 +7139,242 @@ async function changeUserBalance(ctx, direction) {
 
   const actionText = direction === "add" ? "ditambahkan" : "dikurangi";
   await ctx.replyWithHTML(
-    `<blockquote>✅ Saldo berhasil ${actionText}.\n👤 User: <code>${userId}</code>\n` +
-    `💰 Sebelum: <b>${rupiah(before)}</b>\n` +
+    `<blockquote>✅ <b>SALDO BERHASIL DIUBAH</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `👤 User: <b>${user.username ? "@" + user.username : "User"}</b>\n` +
+    `🆔 ID: <code>${userId}</code>\n` +
+    `💰 Saldo Awal: <b>${rupiah(before)}</b>\n` +
     `🪙 Perubahan: <b>${direction === "add" ? "+" : "-"}${rupiah(amount)}</b>\n` +
-    `💳 Sekarang: <b>${rupiah(after)}</b></blockquote>`
+    `💳 Saldo Sekarang: <b>${rupiah(after)}</b></blockquote>`
   );
+
   bot.telegram.sendMessage(
     userId,
-    `<blockquote>ℹ️ <b>Perubahan saldo</b>\nSaldo kamu ${actionText} sebesar <b>${rupiah(amount)}</b>.\n` +
-    `💳 Saldo sekarang: <b>${rupiah(after)}</b></blockquote>`,
+    `<blockquote>ℹ️ <b>Pemberitahuan Saldo</b>\n` +
+    `Saldo akun kamu telah ${actionText} oleh admin sebesar <b>${rupiah(amount)}</b>.\n` +
+    `💳 Saldo kamu sekarang: <b>${rupiah(after)}</b></blockquote>`,
     { parse_mode: "HTML" }
   ).catch(() => {});
 }
 
+async function setUserBalance(ctx) {
+  if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
+  const args = ownerArgs(ctx);
+  const { userId, amount, searchedUsername } = resolveTargetUserAndAmount(ctx, args);
+
+  if (searchedUsername && !userId) {
+    return ctx.reply(`❌ Username ${searchedUsername} belum terdaftar di bot.`);
+  }
+
+  if (!userId || !Number.isFinite(amount) || amount < 0) {
+    return ctx.replyWithHTML(
+      `<blockquote>❌ <b>Format Salah!</b>\n` +
+      `Gunakan:\n` +
+      `• <code>/setsaldo &lt;userId/@username&gt; &lt;jumlah_baru&gt;</code>\n` +
+      `Contoh: <code>/setsaldo 123456789 10000</code> atau <code>/setsaldo @username 0</code>\n\n` +
+      `Atau reply pesan user lalu kirim:\n` +
+      `• <code>/setsaldo &lt;jumlah_baru&gt;</code></blockquote>`
+    );
+  }
+
+  await db.syncUser(userId);
+  let user = db.getUser(userId);
+  if (!user && /^\d+$/.test(userId)) {
+    db.registerUser(userId, String(userId));
+    user = db.getUser(userId);
+  }
+  if (!user) return ctx.reply(`❌ User ${userId} belum terdaftar di bot.`);
+
+  const before = db.getCoin(userId);
+  const after = db.setCoin(userId, amount);
+
+  await ctx.replyWithHTML(
+    `<blockquote>✅ <b>SALDO BERHASIL DI-SET</b>\n` +
+    `━━━━━━━━━━━━━━━━\n` +
+    `👤 User: <b>${user.username ? "@" + user.username : "User"}</b>\n` +
+    `🆔 ID: <code>${userId}</code>\n` +
+    `💰 Saldo Sebelum: <b>${rupiah(before)}</b>\n` +
+    `💳 Saldo Sekarang: <b>${rupiah(after)}</b></blockquote>`
+  );
+
+  bot.telegram.sendMessage(
+    userId,
+    `<blockquote>ℹ️ <b>Pemberitahuan Saldo</b>\n` +
+    `Saldo akun kamu telah disesuaikan oleh admin.\n` +
+    `💳 Saldo kamu sekarang: <b>${rupiah(after)}</b></blockquote>`,
+    { parse_mode: "HTML" }
+  ).catch(() => {});
+}
+
+async function trackUserActivity(ctx) {
+  if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
+  const args = ownerArgs(ctx);
+  const { userId, searchedUsername } = resolveTargetUserAndAmount(ctx, args);
+
+  if (searchedUsername && !userId) {
+    return ctx.reply(`❌ Username ${searchedUsername} tidak ditemukan di database.`);
+  }
+
+  if (!userId) {
+    return ctx.replyWithHTML(
+      `<blockquote>❌ <b>Format Salah!</b>\n` +
+      `Gunakan:\n` +
+      `• <code>/trackuser &lt;userId/@username&gt;</code>\n` +
+      `Contoh: <code>/trackuser 123456789</code> atau <code>/trackuser @username</code>\n\n` +
+      `Atau reply pesan user/deposit lalu ketik: <code>/trackuser</code></blockquote>`
+    );
+  }
+
+  const loadMsg = await ctx.replyWithHTML(`<blockquote>🔍 <i>Mengambil seluruh riwayat aktivitas user <code>${userId}</code>...</i></blockquote>`);
+
+  try {
+    await db.syncUser(userId);
+    const user = db.getUser(userId);
+    if (!user) {
+      return ctx.telegram.editMessageText(
+        ctx.chat.id,
+        loadMsg.message_id,
+        null,
+        `❌ User dengan ID <code>${userId}</code> belum terdaftar di bot.`,
+        { parse_mode: "HTML" }
+      );
+    }
+
+    const { transactions, deposits } = await db.getUserHistoryAll(userId);
+    const keyData = await apiKeys.getOrCreateApiKey(userId);
+
+    const nowJkt = new Date().toLocaleString("id-ID", { timeZone: "Asia/Jakarta" });
+    const joinedJkt = user.joinedAt ? new Date(user.joinedAt).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) : "-";
+    const apiKeyStr = keyData?.key || "Belum ada key";
+    const keyStatusStr = keyData?.isActive ? "AKTIF" : "NONAKTIF";
+    const keyLastUsedStr = keyData?.lastUsed ? new Date(keyData.lastUsed).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) : "Belum pernah dipakai";
+
+    let totalDepositSukses = 0;
+    for (const d of deposits) {
+      if (d.status === "success" || d.status === "approved" || d.status === "paid") {
+        totalDepositSukses += Number(d.nominal || d.paymentAmount || 0);
+      }
+    }
+
+    let totalBelanja = 0;
+    let totalRefund = 0;
+    for (const t of transactions) {
+      if (t.refunded) totalRefund++;
+      else totalBelanja += Number(t.harga || 0);
+    }
+
+    // Format Text File Content
+    const lines = [];
+    lines.push("================================================================================");
+    lines.push("                    LAPORAN TRACKING AKTIVITAS PENGGUNA                         ");
+    lines.push("                          TOKO CALABAY OTP BOT                                  ");
+    lines.push("================================================================================");
+    lines.push(`Waktu Cetak    : ${nowJkt} WIB`);
+    lines.push(`Target User ID : ${userId}`);
+    lines.push(`Username       : ${user.username ? "@" + user.username : "-"}`);
+    lines.push("");
+
+    lines.push("[1] PROFIL & INFORMASI PENGGUNA");
+    lines.push("--------------------------------------------------------------------------------");
+    lines.push(`User ID        : ${userId}`);
+    lines.push(`Username       : ${user.username ? "@" + user.username : "(tidak ada username)"}`);
+    lines.push(`Tanggal Daftar : ${joinedJkt} WIB`);
+    lines.push(`Status Akun    : ${user.isReseller || user.isManualReseller ? "⭐ VIP RESELLER" : "REGULER"}`);
+    lines.push(`Sisa Saldo     : ${rupiah(user.coin || 0)}`);
+    lines.push(`Total Order    : ${transactions.length} Transaksi`);
+    lines.push(`Total Belanja  : ${rupiah(totalBelanja)}`);
+    lines.push(`Total Deposit  : ${deposits.length} Kali (${rupiah(totalDepositSukses)})`);
+    lines.push(`Kode Referral  : ${user.referralCode || "-"}`);
+    lines.push(`Diundang Oleh  : ${user.referredBy ? "User ID " + user.referredBy : "-"}`);
+    lines.push(`Total Reff User: ${user.referralCount || 0} orang (Bonus: ${rupiah(user.referralEarned || 0)})`);
+    lines.push("");
+
+    lines.push("[2] STATUS API KEY DEVELOPER");
+    lines.push("--------------------------------------------------------------------------------");
+    lines.push(`API Key Aktif  : ${apiKeyStr}`);
+    lines.push(`Status Key     : ${keyStatusStr}`);
+    lines.push(`Total Request  : ${keyData?.totalRequests || 0} requests`);
+    lines.push(`Terakhir Pakai : ${keyLastUsedStr}`);
+    lines.push("");
+
+    lines.push("[3] RIWAYAT DEPOSIT / TOPUP (TERBARU -> TERLAMA)");
+    lines.push("--------------------------------------------------------------------------------");
+    if (!deposits.length) {
+      lines.push("(Belum ada riwayat deposit)");
+    } else {
+      deposits.forEach((d, idx) => {
+        const dDate = d.date || d.createdAt;
+        const dDateStr = dDate ? new Date(dDate).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) : "-";
+        const dType = d.type === "auto_qris" ? "Otomatis QRIS (PanzzPay)" : (d.type || "Manual Admin");
+        const statusLabel = d.status === "success" || d.status === "approved" || d.status === "paid" ? "✅ SUKSES" : (d.status === "pending" || d.status === "waiting_payment" ? "⏳ MENUNGGU" : "❌ GAGAL / EXPIRED");
+        
+        lines.push(`${idx + 1}. ID: ${d.id || d.idtransaksi || "-"}`);
+        lines.push(`   Waktu    : ${dDateStr} WIB`);
+        lines.push(`   Metode   : ${dType}`);
+        lines.push(`   Nominal  : ${rupiah(d.nominal || d.paymentAmount || 0)} (Fee: ${rupiah(d.fee || 0)})`);
+        lines.push(`   Status   : ${statusLabel} (${d.status || "-"})`);
+        lines.push("");
+      });
+    }
+
+    lines.push("[4] RIWAYAT PEMBELIAN OTP (TERBARU -> TERLAMA)");
+    lines.push("--------------------------------------------------------------------------------");
+    if (!transactions.length) {
+      lines.push("(Belum ada riwayat pembelian OTP)");
+    } else {
+      transactions.forEach((t, idx) => {
+        const tDate = t.date || t.createdAt;
+        const tDateStr = tDate ? new Date(tDate).toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) : "-";
+        const provLabel = getProviderLabel(t.provider || "wahub");
+        const isRefund = Boolean(t.refunded);
+        const statusStr = isRefund ? "⚠️ REFUND / BATAL (Saldo Dikembalikan)" : "✅ SUKSES (Order Selesai)";
+        const modalStr = t.providerPrice ? ` | Modal: ${rupiah(t.providerPrice)}` : "";
+
+        lines.push(`${idx + 1}. ID Transaksi: ${t.id || "-"}`);
+        lines.push(`   Waktu      : ${tDateStr} WIB`);
+        lines.push(`   Layanan    : ${t.productName || "OTP Service"}`);
+        lines.push(`   Server     : ${provLabel}`);
+        lines.push(`   Nomor HP   : ${t.phone || "-"}`);
+        lines.push(`   Negara     : ${t.negara || "Indonesia"}`);
+        lines.push(`   Harga Beli : ${rupiah(t.harga || 0)}${modalStr}`);
+        lines.push(`   Status     : ${statusStr}`);
+        if (t.orderId) lines.push(`   Provider ID: ${t.orderId}`);
+        lines.push("");
+      });
+    }
+
+    lines.push("================================================================================");
+    lines.push("                             AKHIR DARI LAPORAN                                 ");
+    lines.push("================================================================================");
+
+    const txtContent = lines.join("\n");
+    const filename = `track_${userId}_${Date.now()}.txt`;
+    const caption = `<blockquote>🔍 <b>TRACK USER REPORT</b>
+━━━━━━━━━━━━━━━━
+👤 User: <b>${user.username ? "@" + user.username : "User"}</b>
+🆔 ID: <code>${userId}</code>
+💰 Sisa Saldo: <b>${rupiah(user.coin || 0)}</b>
+📊 Total Order: <b>${transactions.length} Transaksi</b> (${rupiah(totalBelanja)})
+📥 Total Deposit: <b>${deposits.length} Kali</b> (${rupiah(totalDepositSukses)})
+🔑 API Key: <code>${apiKeys.maskKey(apiKeyStr)}</code> (${keyData?.totalRequests || 0} req)
+━━━━━━━━━━━━━━━━
+📁 <i>File .txt lengkap aktivitas user dari terbaru ke terlama dilampirkan di atas.</i></blockquote>`;
+
+    await ctx.telegram.deleteMessage(ctx.chat.id, loadMsg.message_id).catch(() => {});
+    await ctx.replyWithDocument(
+      { source: Buffer.from(txtContent, "utf-8"), filename },
+      { caption, parse_mode: "HTML" }
+    );
+  } catch (err) {
+    console.error("trackUserActivity error:", err);
+    ctx.reply(`❌ Terjadi kesalahan saat tracking user: ${err.message}`);
+  }
+}
+
 bot.command("addsaldo", (ctx) => changeUserBalance(ctx, "add"));
 bot.command("delsaldo", (ctx) => changeUserBalance(ctx, "deduct"));
+bot.command("setsaldo", setUserBalance);
+bot.command(["trackuser", "track", "userhistory", "cekuser"], trackUserActivity);
 
 bot.command(["resetsaldoall", "resetalluser"], async (ctx) => {
   if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
@@ -7750,11 +8049,13 @@ bot.command("ownermenu", async (ctx) => {
 `<blockquote>👑 <b>OWNER MENU</b>
 ━━━━━━━━━━━━━━━━
 <b>SALDO & USER</b>
-/addsaldo [userId/@username] [jumlah]
-/delsaldo [userId/@username] [jumlah]
+/addsaldo [userId/@username] [jumlah] — Tambah saldo
+/delsaldo [userId/@username] [jumlah] — Kurangi saldo
+/setsaldo [userId/@username] [jumlah] — Set saldo ke nominal tertentu
+/trackuser [userId/@username] — Laporan lengkap aktivitas user (.txt)
 /totalsaldo — Cek total sisa saldo semua user digabung
-/listuser
-/listtransaksi [jumlah]
+/listuser — Daftar user bot
+/listtransaksi [jumlah] — Riwayat transaksi global
 
 <b>HARGA & PAYMENT</b>
 /cekprofit — Cek keuntungan owner (Harian/Mingguan/Bulanan/All)
@@ -8654,6 +8955,8 @@ bot.command("help", async (ctx) => {
 /ownermenu — Semua command owner
 /addsaldo [userId/@username] [jumlah] — Tambah saldo
 /delsaldo [userId/@username] [jumlah] — Kurangi saldo
+/setsaldo [userId/@username] [jumlah] — Set saldo user
+/trackuser [userId/@username] — Track aktivitas user (.txt)
 /listuser — Daftar user bot
 /listtransaksi [jumlah] — Transaksi terbaru
  /setprofit — Atur profit flat per layanan

@@ -690,6 +690,64 @@ function deductCoin(userId, jumlah) {
   return user.coin;
 }
 
+function setCoin(userId, jumlah) {
+  const db = load();
+  const uid = String(userId || "");
+  if (!db.users[uid]) {
+    registerUser(uid, uid);
+  }
+  const amt = Math.max(0, Math.floor(Number(jumlah) || 0));
+  db.users[uid].coin = amt;
+  save(db);
+
+  if (_mongoReady) {
+    User.findOneAndUpdate(
+      { userId: uid },
+      { $set: { coin: amt } },
+      { upsert: true, returnDocument: 'after' }
+    ).then((doc) => {
+      if (doc && Number.isFinite(Number(doc.coin))) {
+        db.users[uid].coin = Number(doc.coin);
+      }
+    }).catch(err => console.error("⚠️ [MongoDB] setCoin error:", err.message));
+  }
+
+  return db.users[uid].coin;
+}
+
+async function getUserHistoryAll(userId) {
+  const uid = String(userId || "");
+  let txList = [];
+  let depList = [];
+
+  if (isMongoReady()) {
+    try {
+      txList = await Transaction.find({ userId: uid }).sort({ date: -1, createdAt: -1 }).lean();
+      depList = await Deposit.find({ userId: uid }).sort({ date: -1, createdAt: -1 }).lean();
+    } catch (err) {
+      console.error("⚠️ [MongoDB] getUserHistoryAll error:", err.message);
+    }
+  }
+
+  if (!txList.length) {
+    const d = load();
+    txList = (d.transactions || [])
+      .filter(t => String(t.userId) === uid)
+      .slice()
+      .reverse();
+  }
+
+  if (!depList.length) {
+    const d = load();
+    depList = (d.deposits || [])
+      .filter(dep => String(dep.userId) === uid)
+      .slice()
+      .reverse();
+  }
+
+  return { transactions: txList, deposits: depList };
+}
+
 function resetAllBalances(excludeUserId = null) {
   const db = load();
   let count = 0;
@@ -1623,9 +1681,9 @@ module.exports = {
   connectMongo, isMongoReady, syncUser, persistUser,
   registerUser, getTotalUsers, getTotalTrx, getTotalRevenue, getUser,
   getUsers, findUserByUsername, getTransactions,
-  getCoin, addCoin, deductCoin, resetAllBalances,
+  getCoin, addCoin, deductCoin, setCoin, resetAllBalances,
   addDeposit, addDepositAuto, updateDeposit, getDeposit,
-  addTransaction, getRiwayat, getTopBuyers, getTrxById, getLastTransaction, markRefunded, refundTransaction,
+  addTransaction, getRiwayat, getTopBuyers, getTrxById, getLastTransaction, markRefunded, refundTransaction, getUserHistoryAll,
   normalizeProvider,
   getProfitReport, getProviderStatus, setProviderStatus, getServerStatus, setServerStatus, getProfit, setProfit, setServiceProfit, calculatePrice,
   getResellerPriceDetails, isReseller, checkAndPromoteReseller, getResellerSettings, setResellerEnabled,
