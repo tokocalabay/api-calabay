@@ -33,25 +33,33 @@ let apiCallbacks = {
 
 // ── Auth middleware ──────────────────────────────────────────
 async function authMiddleware(req, res, next) {
+  let key = "";
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    key = authHeader.slice(7).trim();
+  } else if (req.query?.api_key || req.query?.key) {
+    key = String(req.query.api_key || req.query.key).trim();
+  } else if (req.body?.api_key || req.body?.key) {
+    key = String(req.body.api_key || req.body.key).trim();
+  }
+
+  if (!key) {
     return res.status(401).json({
       success: false,
       error: {
         code: "UNAUTHORIZED",
-        message: "Missing or invalid Authorization header. Use: Bearer ck_live_xxx",
+        message: "Missing API Key. Gunakan header 'Authorization: Bearer ck_live_xxx' atau parameter query/body 'api_key'.",
       },
     });
   }
 
-  const key = authHeader.slice(7).trim();
   const keyData = await apiKeys.validateApiKey(key);
   if (!keyData) {
     return res.status(401).json({
       success: false,
       error: {
         code: "INVALID_API_KEY",
-        message: "API key tidak valid atau sudah direvoke.",
+        message: "API key tidak valid atau sudah dinonaktifkan di bot Telegram.",
       },
     });
   }
@@ -312,19 +320,23 @@ router.get("/countries", authMiddleware, async (req, res) => {
   }
 });
 
-// ── GET /api/v1/balance ─────────────────────────────────────
-router.get("/balance", authMiddleware, (req, res) => {
+// ── GET & POST /api/v1/balance ──────────────────────────────
+const handleBalance = async (req, res) => {
   try {
     const uid = req.apiUserId;
+    await db.syncUser(uid);
     const coin = db.getCoin(uid);
     const user = db.getUser(uid);
     res.json({
       success: true,
       data: {
+        user_id: uid,
+        username: user?.username || "",
         balance: coin,
         balance_formatted: rupiah(coin),
-        is_reseller: Boolean(user?.isReseller),
+        is_reseller: Boolean(user?.isReseller || user?.isManualReseller),
         total_trx: user?.trx || 0,
+        synced_with_bot: true,
       },
     });
   } catch (error) {
@@ -333,7 +345,85 @@ router.get("/balance", authMiddleware, (req, res) => {
       error: { code: "INTERNAL_ERROR", message: error.message },
     });
   }
-});
+};
+
+router.get("/balance", authMiddleware, handleBalance);
+router.post("/balance", authMiddleware, handleBalance);
+
+// ── GET & POST /api/v1/check-key ────────────────────────────
+// Cek validitas API Key, profil user Telegram, dan saldo real-time
+const handleCheckKey = async (req, res) => {
+  try {
+    let key = "";
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith("Bearer ")) {
+      key = authHeader.slice(7).trim();
+    } else if (req.query?.api_key || req.query?.key) {
+      key = String(req.query.api_key || req.query.key).trim();
+    } else if (req.body?.api_key || req.body?.key) {
+      key = String(req.body.api_key || req.body.key).trim();
+    }
+
+    if (!key) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          code: "MISSING_API_KEY",
+          message: "API Key wajib diisi via header 'Authorization: Bearer ck_live_xxx', parameter query '?api_key=xxx', atau body JSON '{ \"api_key\": \"xxx\" }'.",
+        },
+      });
+    }
+
+    const keyData = await apiKeys.validateApiKey(key);
+    if (!keyData || !keyData.isActive) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: "INVALID_API_KEY",
+          message: "API Key tidak valid atau sudah dinonaktifkan di bot Telegram.",
+        },
+      });
+    }
+
+    const uid = String(keyData.userId);
+    // Sinkronisasi data user & saldo live dari MongoDB Atlas
+    await db.syncUser(uid);
+    const user = db.getUser(uid);
+    const coin = db.getCoin(uid);
+    const rateCheck = apiKeys.checkRateLimit(key);
+
+    res.json({
+      success: true,
+      data: {
+        api_key: key,
+        user_id: uid,
+        username: user?.username || "",
+        balance: coin,
+        balance_formatted: rupiah(coin),
+        is_reseller: Boolean(user?.isReseller || user?.isManualReseller),
+        total_trx: Number(user?.trx || 0),
+        status: "active",
+        created_at: keyData.createdAt || null,
+        last_used: keyData.lastUsed || null,
+        total_requests: Number(keyData.totalRequests || 0),
+        rate_limit: {
+          limit: apiKeys.RATE_LIMIT_MAX,
+          remaining: rateCheck.remaining,
+          reset_in_seconds: Math.ceil((rateCheck.resetAt - Date.now()) / 1000),
+        },
+        synced_with_bot: true,
+      },
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: error.message },
+    });
+  }
+};
+
+router.get("/check-key", handleCheckKey);
+router.post("/check-key", handleCheckKey);
 
 // ── POST /api/v1/order ──────────────────────────────────────
 // Order a new OTP number

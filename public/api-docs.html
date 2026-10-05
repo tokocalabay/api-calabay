@@ -1151,6 +1151,14 @@
           Daftar Layanan
           <span class="nav-method get">GET</span>
         </a>
+        <a href="#check-key-section" class="nav-item" data-search="check key cek apikey saldo user live tele telegram singkron">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          Cek API Key &amp; Saldo
+          <span class="nav-method get" style="background: rgba(34, 197, 94, 0.15); color: #22c55e; border-color: rgba(34, 197, 94, 0.3);">LIVE</span>
+        </a>
         <a href="#ep-balance" class="nav-item" data-search="balance cek saldo coin">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <rect x="2" y="4" width="20" height="16" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/>
@@ -1364,6 +1372,102 @@
         </div>
       </section>
 
+      <!-- Cek API Key & Saldo Real-Time Section -->
+      <section class="section" id="check-key-section">
+        <h2 class="section-title">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8"/>
+            <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+          </svg>
+          Cek API Key &amp; Saldo Real-Time
+        </h2>
+        <p class="sec-desc">
+          Fitur interaktif untuk mengecek status API Key dan saldo koin akun Anda yang <strong>tersinkronisasi secara langsung (real-time)</strong> dengan Bot Telegram Calabay.
+        </p>
+
+        <div class="base-url-card" style="border-color: var(--accent); background: linear-gradient(180deg, rgba(99, 102, 241, 0.05) 0%, var(--bg-card) 100%);">
+          <div class="base-url-header">
+            <span class="base-url-title">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+              </svg>
+              Live API Key &amp; Balance Checker
+            </span>
+            <span class="status-badge" style="padding: 2px 8px; border-radius: 4px; background: rgba(34, 197, 94, 0.12); color: #22c55e; border: 1px solid rgba(34, 197, 94, 0.3);">
+              <span class="status-dot" style="background:#22c55e;"></span> Synced with Telegram
+            </span>
+          </div>
+
+          <div class="base-url-input-wrap">
+            <span class="base-url-prefix">API KEY</span>
+            <input type="text" id="live-check-input" class="base-url-input" placeholder="Masukkan API Key Anda (ck_live_xxxxxxxxxxxxxxxx)" autocomplete="off" spellcheck="false">
+            <button class="base-url-copy" id="btn-do-check-key" style="background: var(--accent); color: #fff; font-weight: 500; border-left: none; padding: 0 18px;" onclick="runLiveKeyCheck()">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+                <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              </svg>
+              <span>Cek Saldo</span>
+            </button>
+          </div>
+
+          <div class="base-url-hint">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+            </svg>
+            <span>Dapatkan API Key Anda di Bot Telegram <a href="https://t.me/Calabayybot" target="_blank" style="color:var(--accent); text-decoration: underline;">@Calabayybot</a> dengan mengetik <code class="inline">/apikey</code>.</span>
+          </div>
+
+          <!-- Result Container -->
+          <div id="check-key-result" style="display: none; margin-top: 18px; border-top: 1px solid var(--border); padding-top: 16px;">
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 14px;">
+              
+              <div style="background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px; padding: 12px;">
+                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; margin-bottom: 4px;">💰 Saldo Koin / IDR</div>
+                <div id="res-balance-val" style="font-size: 18px; font-weight: 700; color: #22c55e; font-family: var(--mono);">-</div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">Tersingkron ke Bot Tele</div>
+              </div>
+
+              <div style="background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px; padding: 12px;">
+                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; margin-bottom: 4px;">👤 User Telegram</div>
+                <div id="res-user-val" style="font-size: 14px; font-weight: 600; color: var(--text-primary);">-</div>
+                <div id="res-uid-val" style="font-size: 11px; color: var(--text-muted); font-family: var(--mono); margin-top: 2px;">ID: -</div>
+              </div>
+
+              <div style="background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px; padding: 12px;">
+                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; margin-bottom: 4px;">🔑 Status Key</div>
+                <div id="res-status-val" style="font-size: 14px; font-weight: 600; color: #22c55e;">✅ Aktif</div>
+                <div id="res-req-val" style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">0 requests</div>
+              </div>
+
+              <div style="background: var(--bg-inset); border: 1px solid var(--border); border-radius: 6px; padding: 12px;">
+                <div style="font-size: 11px; color: var(--text-muted); text-transform: uppercase; font-weight: 600; margin-bottom: 4px;">🎖️ Status Akun</div>
+                <div id="res-tier-val" style="font-size: 14px; font-weight: 600; color: var(--text-primary);">Reguler</div>
+                <div id="res-trx-val" style="font-size: 11px; color: var(--text-secondary); margin-top: 2px;">Total Trx: 0</div>
+              </div>
+
+            </div>
+
+            <!-- JSON Output Preview -->
+            <div class="code-panel" style="margin-top: 10px;">
+              <div class="code-panel-header">
+                <span class="code-lang-tag">Live API Response (JSON)</span>
+                <button class="copy-action-btn" onclick="copySnippet(this)">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>
+                  <span>Salin</span>
+                </button>
+              </div>
+              <pre class="code-content" id="res-json-raw">{}</pre>
+            </div>
+          </div>
+
+          <div id="check-key-error" style="display: none; margin-top: 14px;" class="callout callout-error">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="7.86 2 16.14 2 22 7.86 22 16.14 16.14 22 7.86 22 2 16.14 2 7.86 7.86 2"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <div id="check-key-error-msg">API Key tidak valid.</div>
+          </div>
+
+        </div>
+      </section>
+
       <!-- Rate Limiting -->
       <section class="section" id="rate-limits">
         <h2 class="section-title">
@@ -1501,8 +1605,58 @@
           Klik pada setiap endpoint untuk melihat rincian parameter request, format header, dan struktur balasan payload.
         </p>
 
+        <!-- 0. GET & POST /check-key -->
+        <div class="endpoint-card expanded" id="ep-check-key">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method get">GET/POST</span>
+            <span class="endpoint-route">/check-key</span>
+            <span class="endpoint-summary">Cek API key &amp; saldo real-time bot Telegram</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Mengecek validitas API Key, rincian akun Telegram, serta saldo koin yang tersinkronisasi langsung dengan bot Telegram. Dapat dipanggil via method GET maupun POST.</p>
+
+            <h4 class="sub-title">Autentikasi &amp; Parameter</h4>
+            <p class="sec-desc">API Key dapat dikirimkan melalui 3 cara alternatif:</p>
+            <ul class="steps-list" style="margin-bottom: 14px;">
+              <li><strong>Header:</strong> <code class="inline">Authorization: Bearer ck_live_xxx</code></li>
+              <li><strong>Query Param:</strong> <code class="inline">/api/v1/check-key?api_key=ck_live_xxx</code></li>
+              <li><strong>JSON Body (POST):</strong> <code class="inline">{ "api_key": "ck_live_xxx" }</code></li>
+            </ul>
+
+            <h4 class="sub-title">Contoh Respon Sukses (200 OK)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">200 OK JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: {
+    <span class="jk">"api_key"</span>: <span class="js">"ck_live_xxxxxxxxxxxxxxxx"</span>,
+    <span class="jk">"user_id"</span>: <span class="js">"8200379210"</span>,
+    <span class="jk">"username"</span>: <span class="js">"calabay_user"</span>,
+    <span class="jk">"balance"</span>: <span class="jn">16100</span>,
+    <span class="jk">"balance_formatted"</span>: <span class="js">"Rp16.100"</span>,
+    <span class="jk">"is_reseller"</span>: <span class="jb">false</span>,
+    <span class="jk">"total_trx"</span>: <span class="jn">12</span>,
+    <span class="jk">"status"</span>: <span class="js">"active"</span>,
+    <span class="jk">"created_at"</span>: <span class="js">"2026-10-01T10:00:00.000Z"</span>,
+    <span class="jk">"last_used"</span>: <span class="js">"2026-10-05T17:00:00.000Z"</span>,
+    <span class="jk">"total_requests"</span>: <span class="jn">28</span>,
+    <span class="jk">"rate_limit"</span>: {
+      <span class="jk">"limit"</span>: <span class="jn">60</span>,
+      <span class="jk">"remaining"</span>: <span class="jn">59</span>,
+      <span class="jk">"reset_in_seconds"</span>: <span class="jn">58</span>
+    },
+    <span class="jk">"synced_with_bot"</span>: <span class="jb">true</span>
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
+
         <!-- 1. GET /services -->
-        <div class="endpoint-card expanded" id="ep-services">
+        <div class="endpoint-card" id="ep-services">
           <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
             <span class="badge-method get">GET</span>
             <span class="endpoint-route">/services</span>
@@ -2133,20 +2287,75 @@ if __name__ == "__main__":
 
   observedSections.forEach(sec => observer.observe(sec));
 
-  // ── Filter / Search Endpoints ──
-  const searchInput = document.getElementById("endpoint-search");
-  if (searchInput) {
-    searchInput.addEventListener("input", (e) => {
-      const q = e.target.value.toLowerCase().trim();
-      document.querySelectorAll(".sidebar .nav-item[data-search]").forEach(item => {
-        const term = item.getAttribute("data-search") || "";
-        const text = item.textContent.toLowerCase();
-        if (!q || term.includes(q) || text.includes(q)) {
-          item.style.display = "flex";
-        } else {
-          item.style.display = "none";
-        }
-      });
+  // ── Live API Key & Balance Checker ──
+  async function runLiveKeyCheck() {
+    const input = document.getElementById("live-check-input");
+    const btn = document.getElementById("btn-do-check-key");
+    const resBox = document.getElementById("check-key-result");
+    const errBox = document.getElementById("check-key-error");
+    const errMsg = document.getElementById("check-key-error-msg");
+    const key = (input?.value || "").trim();
+
+    if (!key) {
+      errBox.style.display = "flex";
+      errMsg.textContent = "Silakan masukkan API Key terlebih dahulu.";
+      resBox.style.display = "none";
+      return;
+    }
+
+    try { localStorage.setItem("calabay_api_key", key); } catch (_) {}
+
+    const originalBtnHtml = btn.innerHTML;
+    btn.innerHTML = `<span>Memuat...</span>`;
+    btn.disabled = true;
+    errBox.style.display = "none";
+
+    try {
+      const resp = await fetch(`/api/v1/check-key?api_key=${encodeURIComponent(key)}`);
+      const data = await resp.json();
+
+      if (!resp.ok || !data.success) {
+        errBox.style.display = "flex";
+        errMsg.textContent = data.error?.message || "API Key tidak valid atau telah dinonaktifkan.";
+        resBox.style.display = "none";
+      } else {
+        resBox.style.display = "block";
+        const d = data.data;
+        document.getElementById("res-balance-val").textContent = d.balance_formatted || `Rp ${Number(d.balance || 0).toLocaleString("id-ID")}`;
+        document.getElementById("res-user-val").textContent = d.username ? `@${d.username}` : `User ${d.user_id}`;
+        document.getElementById("res-uid-val").textContent = `ID: ${d.user_id}`;
+        document.getElementById("res-status-val").textContent = d.status === "active" ? "✅ Aktif" : "❌ Nonaktif";
+        document.getElementById("res-req-val").textContent = `${d.total_requests || 0} requests`;
+        document.getElementById("res-tier-val").textContent = d.is_reseller ? "⭐ VIP Reseller" : "Reguler";
+        document.getElementById("res-trx-val").textContent = `Total Trx Bot: ${d.total_trx || 0}`;
+        document.getElementById("res-json-raw").textContent = JSON.stringify(data, null, 2);
+      }
+    } catch (err) {
+      errBox.style.display = "flex";
+      errMsg.textContent = "Terjadi kesalahan koneksi ke server: " + err.message;
+      resBox.style.display = "none";
+    } finally {
+      btn.innerHTML = originalBtnHtml;
+      btn.disabled = false;
+    }
+  }
+
+  // Load saved key on page load
+  try {
+    const saved = localStorage.getItem("calabay_api_key");
+    if (saved && document.getElementById("live-check-input")) {
+      document.getElementById("live-check-input").value = saved;
+    }
+  } catch (_) {}
+
+  // Allow pressing Enter in live check input
+  const liveCheckInput = document.getElementById("live-check-input");
+  if (liveCheckInput) {
+    liveCheckInput.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        runLiveKeyCheck();
+      }
     });
   }
 </script>

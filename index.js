@@ -13,6 +13,7 @@ const rumahotp = require("./lib/rumahotp");
 const fastbit = require("./lib/fastbit");
 const { createPayment, cekPaid, cancelQris } = require("./lib/payment");
 const { createZip } = require("./lib/zip");
+const { User } = require("./lib/models");
 const apiKeys = require("./lib/api-keys");
 const { createApiServer } = require("./api-server");
 const QRCode = require("qrcode");
@@ -333,6 +334,7 @@ async function sendChannelOrderReportNotification({
   type = "WHATSAPP",
   username = "",
   userId = "",
+  saldo = null,
   serviceName = "",
   phone = "",
   harga = 0,
@@ -348,10 +350,15 @@ async function sendChannelOrderReportNotification({
     ? ` (Modal: Rp ${Number(modal).toLocaleString("id-ID")})`
     : "";
 
+  const userSaldo = (saldo !== null && saldo !== undefined)
+    ? Number(saldo)
+    : (userId ? Number(db.getCoin(userId) || 0) : 0);
+  const saldoText = `\n💸 Sisa Saldo: <b>Rp ${userSaldo.toLocaleString("id-ID")}</b>`;
+
   const text = `<blockquote>💬 <b>LAPORAN ORDER OTP (${String(type).toUpperCase()})</b>
 
 👤 User: <b>${escapeHTML(userDisplay)}</b>
-🆔 ID: <code>${escapeHTML(String(userId || "-"))}</code>
+🆔 ID: <code>${escapeHTML(String(userId || "-"))}</code>${saldoText}
 💬 Layanan: <b>${escapeHTML(serviceName || "-")}</b>
 📞 Nomor: <code>${escapeHTML(String(phone || "-"))}</code>
 💰 Harga: <b>Rp ${Number(harga || 0).toLocaleString("id-ID")}</b>${modalText}
@@ -704,6 +711,9 @@ bot.use(async (ctx, next) => {
     if (!db.getUser(uid)) {
       db.registerUser(uid, username);
     }
+    try {
+      await db.syncUser(uid);
+    } catch (_) {}
   }
   if (!db.getMaintenance() || isOwner(ctx)) return next();
   if (ctx.callbackQuery) {
@@ -3442,7 +3452,7 @@ Coin dikembalikan.
     } catch (error) {
       console.error("FastBit poll error:", error.message);
     }
-  }, 8_000);
+  }, 4_000);
 }
 
 async function showHeroServices(ctx, uid, editMsgId = null) {
@@ -6008,10 +6018,31 @@ async function cancelHeroSmsOrder(orderId) {
 }
 
 function extractOtp(text) {
-  const match = String(text || "").match(/(?:^|\D)((?:\d[\s-]?){4,8})(?:\D|$)/);
-  if (!match) return "";
-  const code = match[1].replace(/[\s-]/g, "");
-  return /^\d{4,8}$/.test(code) ? code : "";
+  const message = String(text || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;|&#160;/gi, " ")
+    .trim();
+  if (!message) return "";
+
+  const labelled = message.match(
+    /(?:otp|one[-\s]?time|code|kode|pin|verification|verifikasi|passcode|security|kata sandi|sandi)[^\d]{0,40}((?:\d[\s-]?){4,8})(?!\d)/i
+  );
+  if (labelled) {
+    const code = String(labelled[1]).replace(/[\s-]/g, "");
+    if (/^\d{4,8}$/.test(code)) return code;
+  }
+
+  const colonMatch = message.match(/[:=]\s*((?:\d[\s-]?){4,8})(?!\d)/);
+  if (colonMatch) {
+    const code = String(colonMatch[1]).replace(/[\s-]/g, "");
+    if (/^\d{4,8}$/.test(code)) return code;
+  }
+
+  const tokens = [...message.matchAll(/(?:^|\D)((?:\d[\s-]?){4,8})(?=\D|$)/g)]
+    .map((match) => String(match[1]).replace(/[\s-]/g, ""))
+    .filter((c) => /^\d{4,8}$/.test(c));
+
+  return tokens.length > 0 ? tokens[0] : "";
 }
 
 function rememberFullSms(uid, orderId, text) {
@@ -7721,10 +7752,12 @@ bot.command("ownermenu", async (ctx) => {
 <b>SALDO & USER</b>
 /addsaldo [userId/@username] [jumlah]
 /delsaldo [userId/@username] [jumlah]
+/totalsaldo — Cek total sisa saldo semua user digabung
 /listuser
 /listtransaksi [jumlah]
 
 <b>HARGA & PAYMENT</b>
+/cekprofit — Cek keuntungan owner (Harian/Mingguan/Bulanan/All)
 /setprofit — Setting profit per layanan dari API
 /setfee [persen|flat] [nilai]
 /manualdeposit [on|off] — Atur ON/OFF deposit manual
@@ -7983,6 +8016,181 @@ ${bSms2Text}
     return ctx.telegram.editMessageText(ctx.chat.id, loadMsg.message_id, null, text, { parse_mode: "HTML" }).catch(() => ctx.replyWithHTML(text));
   }
   return ctx.replyWithHTML(text);
+});
+
+bot.command(["totalsaldo", "totalsaldouser", "saldouser"], async (ctx) => {
+  if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
+  const loadMsg = await ctx.replyWithHTML("<blockquote>🔍 <i>Mengambil data live dari MongoDB Atlas...</i></blockquote>");
+
+  let users = [];
+  let isFromMongo = false;
+
+  if (db.isMongoReady()) {
+    try {
+      const docs = await User.find({}).lean();
+      if (Array.isArray(docs) && docs.length > 0) {
+        users = docs.map((u) => ({
+          id: String(u.userId),
+          username: u.username || "",
+          coin: Number(u.coin) || 0,
+        }));
+        isFromMongo = true;
+      }
+    } catch (err) {
+      console.error("⚠️ [/totalsaldo] Gagal query MongoDB:", err.message);
+    }
+  }
+
+  // Fallback to in-memory/db.getUsers() if MongoDB is offline or empty
+  if (!users.length) {
+    users = db.getUsers().map((u) => ({
+      id: String(u.id),
+      username: u.username || "",
+      coin: Number(u.coin) || 0,
+    }));
+  }
+
+  let totalSaldo = 0;
+  let activeBalanceCount = 0;
+  let zeroBalanceCount = 0;
+
+  for (const u of users) {
+    const coin = Number(u.coin) || 0;
+    totalSaldo += coin;
+    if (coin > 0) {
+      activeBalanceCount++;
+    } else {
+      zeroBalanceCount++;
+    }
+  }
+
+  // Top 10 users with highest balance
+  const topUsers = [...users]
+    .filter((u) => Number(u.coin) > 0)
+    .sort((a, b) => (Number(b.coin) || 0) - (Number(a.coin) || 0))
+    .slice(0, 10);
+
+  let topUsersText = "";
+  if (topUsers.length > 0) {
+    topUsersText =
+      "\n\n🏆 <b>Top 10 Saldo Tertinggi:</b>\n" +
+      topUsers
+        .map(
+          (u, i) =>
+            `${i + 1}. <b>${escapeHTML(u.username ? `@${u.username.replace(/^@/, '')}` : `User ${u.id}`)}</b> (<code>${u.id}</code>): <b>${rupiah(u.coin)}</b>`
+        )
+        .join("\n");
+  }
+
+  const dbSourceText = isFromMongo ? "🟢 <b>MongoDB Atlas (Live Cloud)</b>" : "🟡 <b>Local Cache / Snapshot</b>";
+
+  const text = `<blockquote>💰 <b>TOTAL SALDO SELURUH USER</b>
+━━━━━━━━━━━━━━━━
+🗄️ <b>Sumber Data:</b> ${dbSourceText}
+👥 <b>Total User Terdaftar:</b> <b>${users.length.toLocaleString("id-ID")}</b> user
+🟢 <b>User Memiliki Saldo:</b> <b>${activeBalanceCount.toLocaleString("id-ID")}</b> user
+⚪ <b>User Saldo Rp0:</b> <b>${zeroBalanceCount.toLocaleString("id-ID")}</b> user
+━━━━━━━━━━━━━━━━
+💵 <b>TOTAL SISA SALDO SEMUA USER:</b>
+👉 <b>${rupiah(totalSaldo)}</b>
+━━━━━━━━━━━━━━━━
+📊 <b>Rata-rata Saldo:</b> <b>${rupiah(activeBalanceCount > 0 ? Math.round(totalSaldo / activeBalanceCount) : 0)}</b> / user aktif${topUsersText}
+━━━━━━━━━━━━━━━━</blockquote>`;
+
+  if (loadMsg) {
+    return ctx.telegram
+      .editMessageText(ctx.chat.id, loadMsg.message_id, null, text, { parse_mode: "HTML" })
+      .catch(() => ctx.replyWithHTML(text));
+  }
+  return ctx.replyWithHTML(text);
+});
+
+
+// ── ⭐ OWNER: CEK PROFIT COMMAND ──────────────────────────────
+function renderProfitReportHTML(report) {
+  return `<blockquote>📈 <b>LAPORAN KEUNTUNGAN (PROFIT OWNER)</b>
+━━━━━━━━━━━━━━━━
+📅 Periode: <b>${escapeHTML(report.periodLabel)}</b>
+
+💰 <b>RINGKASAN TOTAL</b>
+• Omset Total    : <b>${rupiah(report.totalOmset)}</b>
+• Modal Provider : <b>${rupiah(report.totalModal)}</b>
+• <b>Keuntungan Bersih: ${rupiah(report.totalProfit)}</b>
+• Total Sukses   : <b>${report.totalTrx.toLocaleString("id-ID")} TRX</b>
+• Total Refunded : <b>${report.totalRefunded.toLocaleString("id-ID")} TRX</b>
+
+⭐ <b>RINCIAN RESELLER</b>
+• Trx Reseller   : <b>${report.reseller.trx.toLocaleString("id-ID")} TRX</b>
+• Omset Reseller : <b>${rupiah(report.reseller.omset)}</b>
+• Modal Provider : <b>${rupiah(report.reseller.modal)}</b>
+• <b>Profit Reseller: ${rupiah(report.reseller.profit)}</b>
+
+👤 <b>RINCIAN USER REGULER</b>
+• Trx Reguler    : <b>${report.reguler.trx.toLocaleString("id-ID")} TRX</b>
+• Omset Reguler  : <b>${rupiah(report.reguler.omset)}</b>
+• Modal Provider : <b>${rupiah(report.reguler.modal)}</b>
+• <b>Profit Reguler : ${rupiah(report.reguler.profit)}</b>
+━━━━━━━━━━━━━━━━
+⏰ <i>Waktu Cek: ${getWaktu()}</i></blockquote>`;
+}
+
+function getProfitReportKeyboard(activePeriod = "today") {
+  const isToday = activePeriod === "today" || activePeriod === "harian";
+  const isWeek = activePeriod === "week" || activePeriod === "mingguan";
+  const isMonth = activePeriod === "month" || activePeriod === "bulanan";
+  const isAll = activePeriod === "all" || activePeriod === "semua";
+
+  return Markup.inlineKeyboard([
+    [
+      Markup.button.callback(isToday ? "🔘 Harian" : "📅 Harian", "cekprofit_today"),
+      Markup.button.callback(isWeek ? "🔘 Mingguan" : "📆 Mingguan", "cekprofit_week"),
+    ],
+    [
+      Markup.button.callback(isMonth ? "🔘 Bulanan" : "🗓️ Bulanan", "cekprofit_month"),
+      Markup.button.callback(isAll ? "🔘 Semua Waktu" : "📊 Semua Waktu", "cekprofit_all"),
+    ],
+    [
+      Markup.button.callback("🔄 Refresh", `cekprofit_${activePeriod}`),
+    ],
+  ]);
+}
+
+bot.command(["cekprofit", "profit", "keuntungan"], async (ctx) => {
+  if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
+
+  const args = (ctx.message.text || "").trim().split(/\s+/).slice(1);
+  let period = "today";
+  if (args[0]) {
+    const a = args[0].toLowerCase();
+    if (["mingguan", "minggu", "week", "7d"].includes(a)) period = "week";
+    else if (["bulanan", "bulan", "month", "30d"].includes(a)) period = "month";
+    else if (["all", "semua", "total"].includes(a)) period = "all";
+    else if (["harian", "hari", "today", "1d"].includes(a)) period = "today";
+  }
+
+  const report = db.getProfitReport(period);
+  const text = renderProfitReportHTML(report);
+  await ctx.replyWithHTML(text, getProfitReportKeyboard(period));
+});
+
+bot.action(/^cekprofit_(today|week|month|all)$/, async (ctx) => {
+  if (!isOwner(ctx)) return ctx.answerCbQuery("❌ Khusus owner.", { show_alert: true });
+  const period = ctx.match[1];
+  const report = db.getProfitReport(period);
+  const text = renderProfitReportHTML(report);
+  try {
+    await ctx.editMessageText(text, {
+      parse_mode: "HTML",
+      ...getProfitReportKeyboard(period),
+    });
+    await ctx.answerCbQuery(`Laporan ${report.periodLabel} dimuat!`);
+  } catch (err) {
+    if (!err.message.includes("message is not modified")) {
+      await ctx.replyWithHTML(text, getProfitReportKeyboard(period));
+    } else {
+      await ctx.answerCbQuery("Data sudah paling baru.");
+    }
+  }
 });
 
 bot.command("stats", async (ctx) => {
@@ -8581,13 +8789,13 @@ const userCommands = [
 ];
 bot.telegram.setMyCommands(userCommands);
 
-async function restoreWahubPollers() {
+async function restoreWahubPollers() { const now = Date.now();
   for (const { userId, session } of wahubSessionDb.list()) {
     if (!session || typeof session !== "object") {
       wahubSessionDb.remove(userId);
       continue;
     }
-    const isWaiting = session.status === "waiting" || isWahubWaitingSession(session);
+    const isWaiting = (session.status === "waiting" || isWahubWaitingSession(session)) && (!session.createdAt || (now - new Date(session.createdAt).getTime() < 20 * 60 * 1000));
     if (isWaiting) {
       if (["fastbit", "herosms", "rumahotp"].includes(session.provider)) {
         pollApiSmsOrder({ ...session, userId });
@@ -8713,8 +8921,7 @@ async function restorePendingDeposits() {
     console.log("⚡ Polling cepat pembayaran PanzzPay aktif!");
 
     // 6. Launch Telegram Bot
-    await bot.launch();
-    console.log("✅ Bot Telegram aktif!");
+    bot.launch().then(() => console.log("✅ Bot Telegram aktif!")).catch(e => console.error("❌ Launch error:", e.message));
 
     // Cek auto-reset transaksi bulanan reseller saat startup
     try {

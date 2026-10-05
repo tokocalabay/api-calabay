@@ -632,41 +632,59 @@ const getTotalRevenue = () => load().totalRevenue;
 // ══════════════════════════════════════════════════════════════
 function getCoin(userId) {
   const db = load();
-  return db.users[userId]?.coin || 0;
+  const uid = String(userId || "");
+  return Number(db.users[uid]?.coin || 0);
 }
 
 function addCoin(userId, jumlah) {
   const db = load();
-  if (!db.users[userId]) {
-    registerUser(userId, String(userId));
-    return addCoin(userId, jumlah);
+  const uid = String(userId || "");
+  if (!db.users[uid]) {
+    registerUser(uid, uid);
   }
   const amt = Number(jumlah);
-  if (!Number.isFinite(amt) || amt <= 0) return db.users[userId].coin || 0;
-  db.users[userId].coin = (db.users[userId].coin || 0) + amt;
+  if (!Number.isFinite(amt) || amt <= 0) return Number(db.users[uid]?.coin || 0);
+
+  db.users[uid].coin = Number(db.users[uid].coin || 0) + amt;
   save(db);
 
   if (_mongoReady) {
-    User.updateOne({ userId: String(userId) }, { $set: { coin: db.users[userId].coin } })
-      .catch(err => console.error("⚠️ [MongoDB] addCoin error:", err.message));
+    User.findOneAndUpdate(
+      { userId: uid },
+      { $inc: { coin: amt } },
+      { upsert: true, returnDocument: 'after' }
+    ).then((doc) => {
+      if (doc && Number.isFinite(Number(doc.coin))) {
+        db.users[uid].coin = Number(doc.coin);
+      }
+    }).catch(err => console.error("⚠️ [MongoDB] addCoin error:", err.message));
   }
 
-  return db.users[userId].coin;
+  return db.users[uid].coin;
 }
 
 function deductCoin(userId, jumlah) {
-  const db   = load();
-  const user = db.users[userId];
+  const db = load();
+  const uid = String(userId || "");
+  const user = db.users[uid];
   if (!user) return false;
   const amt = Number(jumlah);
-  if (!Number.isFinite(amt) || amt <= 0) return user.coin;
-  if ((user.coin || 0) < amt) return false;
-  user.coin -= amt;
+  if (!Number.isFinite(amt) || amt <= 0) return Number(user.coin || 0);
+  if (Number(user.coin || 0) < amt) return false;
+
+  user.coin = Number(user.coin || 0) - amt;
   save(db);
 
   if (_mongoReady) {
-    User.updateOne({ userId: String(userId) }, { $set: { coin: user.coin } })
-      .catch(err => console.error("⚠️ [MongoDB] deductCoin error:", err.message));
+    User.findOneAndUpdate(
+      { userId: uid, coin: { $gte: amt } },
+      { $inc: { coin: -amt } },
+      { returnDocument: 'after' }
+    ).then((doc) => {
+      if (doc && Number.isFinite(Number(doc.coin))) {
+        user.coin = Number(doc.coin);
+      }
+    }).catch(err => console.error("⚠️ [MongoDB] deductCoin error:", err.message));
   }
 
   return user.coin;
@@ -962,6 +980,118 @@ function getLastTransaction(userId) {
     .slice(-1)[0] || null;
 }
 
+
+// ══════════════════════════════════════════════════════════════
+// PROFIT REPORT (HARIAN / MINGGUAN / BULANAN / ALL)
+// ══════════════════════════════════════════════════════════════
+function getProfitReport(period = "today") {
+  const db = load();
+  const txs = db.transactions || [];
+  const now = new Date();
+  const jktFormatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const todayStr = jktFormatter.format(now);
+  const startOfDay = new Date(todayStr + "T00:00:00+07:00").getTime();
+  const startOfWeek = startOfDay - (6 * 24 * 60 * 60 * 1000);
+  const [year, month] = todayStr.split("-");
+  const startOfMonth = new Date(year + "-" + month + "-01T00:00:00+07:00").getTime();
+
+  let startTime = 0;
+  let periodLabel = "Semua Waktu";
+  const p = String(period || "").toLowerCase();
+
+  if (p === "today" || p === "harian" || p === "hari" || p === "1d") {
+    startTime = startOfDay;
+    periodLabel = "Hari Ini (" + todayStr + ")";
+  } else if (p === "week" || p === "mingguan" || p === "minggu" || p === "7d") {
+    startTime = startOfWeek;
+    periodLabel = "Mingguan (7 Hari Terakhir)";
+  } else if (p === "month" || p === "bulanan" || p === "bulan" || p === "30d") {
+    startTime = startOfMonth;
+    periodLabel = "Bulanan (" + year + "-" + month + ")";
+  }
+
+  let totalTrx = 0;
+  let totalRefunded = 0;
+  let totalOmset = 0;
+  let totalModal = 0;
+  let totalProfit = 0;
+
+  let regulerTrx = 0;
+  let regulerOmset = 0;
+  let regulerModal = 0;
+  let regulerProfit = 0;
+
+  let resellerTrx = 0;
+  let resellerOmset = 0;
+  let resellerModal = 0;
+  let resellerProfit = 0;
+
+  for (const t of txs) {
+    if (!t) continue;
+    const d = new Date(t.date || t.createdAt || 0);
+    const tTime = d.getTime();
+
+    if (startTime > 0 && tTime < startTime) continue;
+
+    const isRefunded = Boolean(t.refunded === true || t.refunded === "true" || t.refunded === 1);
+    if (isRefunded) {
+      totalRefunded++;
+      continue;
+    }
+
+    const harga = Number(t.harga) || 0;
+    const modal = Number(t.providerPrice) || 0;
+    const profit = Math.max(0, harga - modal);
+    const uid = String(t.userId);
+    const user = db.users[uid];
+    const isReseller = Boolean(user && (user.isReseller || user.isManualReseller));
+
+    totalTrx++;
+    totalOmset += harga;
+    totalModal += modal;
+    totalProfit += profit;
+
+    if (isReseller) {
+      resellerTrx++;
+      resellerOmset += harga;
+      resellerModal += modal;
+      resellerProfit += profit;
+    } else {
+      regulerTrx++;
+      regulerOmset += harga;
+      regulerModal += modal;
+      regulerProfit += profit;
+    }
+  }
+
+  return {
+    period: p || "today",
+    periodLabel,
+    totalTrx,
+    totalRefunded,
+    totalOmset,
+    totalModal,
+    totalProfit,
+    reguler: {
+      trx: regulerTrx,
+      omset: regulerOmset,
+      modal: regulerModal,
+      profit: regulerProfit,
+    },
+    reseller: {
+      trx: resellerTrx,
+      omset: resellerOmset,
+      modal: resellerModal,
+      profit: resellerProfit,
+    },
+  };
+}
+
 function getTransactions(limit = 20) {
   const safeLimit = Math.min(Math.max(Number(limit) || 20, 1), 100);
   return load().transactions.slice(-safeLimit).reverse();
@@ -993,9 +1123,10 @@ function markRefunded(trxId) {
 
 function refundTransaction(trxId, userId) {
   const db = load();
+  const uid = String(userId || "");
   const trx = db.transactions.find(item => item.id === trxId);
   if (!trx) return { refunded: false, reason: "not-found", amount: 0 };
-  if (String(trx.userId) !== String(userId)) {
+  if (String(trx.userId) !== uid) {
     return { refunded: false, reason: "user-mismatch", amount: 0 };
   }
   const amount = Number(trx.harga);
@@ -1005,12 +1136,12 @@ function refundTransaction(trxId, userId) {
   if (trx.refunded) {
     return { refunded: false, alreadyRefunded: true, reason: "already-refunded", amount };
   }
-  const user = db.users[String(userId)];
+  const user = db.users[uid];
   if (!user) return { refunded: false, reason: "user-not-found", amount: 0 };
 
   trx.refunded = true;
   trx.refundedAt = new Date().toISOString();
-  user.coin = (user.coin || 0) + amount;
+  user.coin = Number(user.coin || 0) + amount;
   if ((user.monthlyTrx || 0) > 0) user.monthlyTrx -= 1;
   if ((user.trx || 0) > 0) user.trx -= 1;
   save(db);
@@ -1018,12 +1149,20 @@ function refundTransaction(trxId, userId) {
   if (_mongoReady) {
     Transaction.updateOne({ id: trxId }, { refunded: true, refundedAt: trx.refundedAt })
       .catch(err => console.error("⚠️ [MongoDB] refundTrx error:", err.message));
-    User.updateOne({ userId: String(userId) }, {
-      $set: {
-        coin: user.coin,
-        monthlyTrx: user.monthlyTrx || 0,
-        trx: user.trx || 0,
+    User.findOneAndUpdate(
+      { userId: uid },
+      {
+        $inc: { coin: amount },
+        $set: {
+          monthlyTrx: Math.max(0, Number(user.monthlyTrx || 0)),
+          trx: Math.max(0, Number(user.trx || 0)),
+        },
       },
+      { returnDocument: 'after' }
+    ).then((doc) => {
+      if (doc && Number.isFinite(Number(doc.coin))) {
+        user.coin = Number(doc.coin);
+      }
     }).catch(err => console.error("⚠️ [MongoDB] refundCoin error:", err.message));
   }
 
@@ -1488,7 +1627,7 @@ module.exports = {
   addDeposit, addDepositAuto, updateDeposit, getDeposit,
   addTransaction, getRiwayat, getTopBuyers, getTrxById, getLastTransaction, markRefunded, refundTransaction,
   normalizeProvider,
-  getProviderStatus, setProviderStatus, getServerStatus, setServerStatus, getProfit, setProfit, setServiceProfit, calculatePrice,
+  getProfitReport, getProviderStatus, setProviderStatus, getServerStatus, setServerStatus, getProfit, setProfit, setServiceProfit, calculatePrice,
   getResellerPriceDetails, isReseller, checkAndPromoteReseller, getResellerSettings, setResellerEnabled,
   setResellerThreshold, setResellerDiscount, setResellerMonthlyReset, setUserReseller, getResellers, resetMonthlyReseller, getCurrentMonth, checkUserMonth,
   getPaymentFee, setPaymentFee, calculatePaymentFee, calculatePaymentTotal,
