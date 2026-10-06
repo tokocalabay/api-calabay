@@ -8,6 +8,7 @@
  */
 const express = require("express");
 const cors = require("cors");
+const axios = require("axios");
 const config = require("./config");
 const db = require("./db");
 const wahub = require("./lib/wahub");
@@ -26,6 +27,135 @@ let apiCallbacks = {
   sendRealtimeOtp: null,
   sendOrderReport: null,
 };
+
+function escapeHTML(str) {
+  return String(str || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function sensorPhone(p) {
+  const s = String(p || "").replace(/[^0-9+]/g, "");
+  if (s.length < 8) return s;
+  return s.slice(0, 5) + "XXXXX" + s.slice(-2);
+}
+
+function getWaktuJakarta() {
+  const d = new Date();
+  return d.toLocaleString("id-ID", { timeZone: "Asia/Jakarta" }) + " WIB";
+}
+
+async function sendTelegramDirect(chatId, text) {
+  if (!chatId || !config.BOT_TOKEN) return;
+  try {
+    await axios.post(
+      `https://api.telegram.org/bot${config.BOT_TOKEN}/sendMessage`,
+      {
+        chat_id: chatId,
+        text: text,
+        parse_mode: "HTML",
+      },
+      { timeout: 8000 }
+    );
+  } catch (err) {
+    console.error("⚠️ [Telegram Direct Error]:", err.response?.data?.description || err.message);
+  }
+}
+
+async function sendChannelRealtimeOtp({ serviceName, phone, otp, trxId }) {
+  if (typeof apiCallbacks.sendRealtimeOtp === "function") {
+    try {
+      await apiCallbacks.sendRealtimeOtp({ serviceName, phone, otp, trxId });
+      return;
+    } catch (e) {
+      console.error("[sendRealtimeOtp callback error]:", e.message);
+    }
+  }
+
+  const targetChannel = config.CHANNEL_NOTIF_REALTIME || config.CHANNEL_USERNAME;
+  if (!targetChannel) return;
+
+  const text = `<blockquote>🔔 <b>NOTIF REALTIME OTP MASUK!</b>
+━━━━━━━━━━━━━━━━
+🔧 Layanan : <b>${escapeHTML(serviceName || "Nokos")}</b>
+📱 Nomor   : <code>${escapeHTML(sensorPhone(phone))}</code>
+🔑 Kode OTP: <code>${escapeHTML(otp)}</code>
+🧾 TRX ID  : <code>${escapeHTML(trxId || "-")}</code>
+⏰ Waktu   : <i>${getWaktuJakarta()}</i>
+━━━━━━━━━━━━━━━━
+⚡ <i>Transaksi otomatis & realtime via ${config.API_DOCS_URL || "api.calabay.my.id"}</i></blockquote>`;
+
+  await sendTelegramDirect(targetChannel, text);
+}
+
+async function sendChannelOrderReport({
+  type = "WHATSAPP",
+  username = "",
+  userId = "",
+  saldo = null,
+  serviceName = "",
+  phone = "",
+  harga = 0,
+  modal = 0,
+  otp = "",
+  serverName = "",
+  isNewOrder = false,
+}) {
+  if (!isNewOrder && typeof apiCallbacks.sendOrderReport === "function") {
+    try {
+      await apiCallbacks.sendOrderReport({
+        type,
+        username,
+        userId,
+        saldo,
+        serviceName,
+        phone,
+        harga,
+        modal,
+        otp,
+        serverName,
+      });
+      return;
+    } catch (e) {
+      console.error("[sendOrderReport callback error]:", e.message);
+    }
+  }
+
+  const targetChannel = config.CHANNEL_NOTIF_ORDER;
+  if (!targetChannel) return;
+
+  const userDisplay = username ? username.replace(/^@/, "") : (userId ? String(userId) : "User");
+  const modalText = (modal !== undefined && modal !== null && Number(modal) > 0)
+    ? ` (Modal: Rp ${Number(modal).toLocaleString("id-ID")})`
+    : "";
+
+  const userSaldo = (saldo !== null && saldo !== undefined)
+    ? Number(saldo)
+    : (userId ? Number(db.getCoin(userId) || 0) : 0);
+  const saldoText = `\n💸 Sisa Saldo: <b>Rp ${userSaldo.toLocaleString("id-ID")}</b>`;
+
+  const headerTitle = isNewOrder
+    ? `🛒 <b>LAPORAN ORDER API MASUK (${String(type).toUpperCase()})</b>`
+    : `💬 <b>LAPORAN ORDER OTP (${String(type).toUpperCase()})</b>`;
+
+  const statusOrOtpText = isNewOrder
+    ? `⏳ Status: <b>Menunggu OTP...</b>`
+    : `🔐 Kode: <code>${escapeHTML(String(otp || "-"))}</code>`;
+
+  const text = `<blockquote>${headerTitle}
+
+👤 User: <b>${escapeHTML(userDisplay)}</b>
+🆔 ID: <code>${escapeHTML(String(userId || "-"))}</code>${saldoText}
+💬 Layanan: <b>${escapeHTML(serviceName || "-")}</b>
+📞 Nomor: <code>${escapeHTML(String(phone || "-"))}</code>
+💰 Harga: <b>Rp ${Number(harga || 0).toLocaleString("id-ID")}</b>${modalText}
+${statusOrOtpText}
+🖥️ Server: <b>${escapeHTML(serverName || "-")}</b>
+🌐 Source: <b>API Web (api.calabay.my.id)</b></blockquote>`;
+
+  await sendTelegramDirect(targetChannel, text);
+}
 
 // ══════════════════════════════════════════════════════════════
 // MIDDLEWARE
@@ -539,6 +669,19 @@ router.post("/order", authMiddleware, async (req, res) => {
         try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
       }
 
+      sendChannelOrderReport({
+        type: "WHATSAPP",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: order.phone,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel("wahub"),
+        isNewOrder: true,
+      }).catch(() => {});
+
       return res.status(201).json({
         success: true,
         data: {
@@ -617,6 +760,19 @@ router.post("/order", authMiddleware, async (req, res) => {
       if (typeof apiCallbacks.onOrderCreated === "function") {
         try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
       }
+
+      sendChannelOrderReport({
+        type: "WHATSAPP",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: order.phone,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel("engineunicorn"),
+        isNewOrder: true,
+      }).catch(() => {});
 
       return res.status(201).json({
         success: true,
@@ -760,6 +916,19 @@ router.post("/order", authMiddleware, async (req, res) => {
         try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
       }
 
+      sendChannelOrderReport({
+        type: "SMS",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: order.phone_number,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel("fastbit"),
+        isNewOrder: true,
+      }).catch(() => {});
+
       return res.status(201).json({
         success: true,
         data: {
@@ -844,6 +1013,19 @@ router.post("/order", authMiddleware, async (req, res) => {
       if (typeof apiCallbacks.onOrderCreated === "function") {
         try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
       }
+
+      sendChannelOrderReport({
+        type: "SMS",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: order.phone_number,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel("herosms"),
+        isNewOrder: true,
+      }).catch(() => {});
 
       return res.status(201).json({
         success: true,
@@ -935,6 +1117,19 @@ router.post("/order", authMiddleware, async (req, res) => {
       if (typeof apiCallbacks.onOrderCreated === "function") {
         try { apiCallbacks.onOrderCreated(newSess); } catch (e) { console.error("[onOrderCreated error]:", e); }
       }
+
+      sendChannelOrderReport({
+        type: "FLASHCALL",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: order.phone_number,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel("rumahotp"),
+        isNewOrder: true,
+      }).catch(() => {});
 
       return res.status(201).json({
         success: true,
@@ -1036,38 +1231,31 @@ router.get("/order/:id", authMiddleware, async (req, res) => {
           sess.paidAt = sess.paidAt || new Date().toISOString();
           wahubSessionDb.set(uid, sess);
 
-          if (typeof apiCallbacks.sendRealtimeOtp === "function") {
-            try {
-              apiCallbacks.sendRealtimeOtp({
-                serviceName: sess.serviceName,
-                phone: sess.phone,
-                otp: otp,
-                trxId: sess.trxId || orderId,
-              });
-            } catch (e) {
-              console.error("[sendRealtimeOtp error]:", e.message);
-            }
-          }
-          if (typeof apiCallbacks.sendOrderReport === "function") {
-            try {
-              const userObj = db.getUser(uid);
-              const username = userObj?.username || `api_user_${uid}`;
-              const isWa = ["wahub", "engineunicorn"].includes(sess.provider);
-              apiCallbacks.sendOrderReport({
-                type: isWa ? "WHATSAPP" : "SMS",
-                username,
-                userId: uid,
-                serviceName: sess.serviceName,
-                phone: sess.phone,
-                harga: sess.hargaUser,
-                modal: sess.providerPrice || sess.hargaDasar || 0,
-                otp: otp,
-                serverName: getProviderLabel(sess.provider || "wahub"),
-              }).catch(() => {});
-            } catch (e) {
-              console.error("[sendOrderReport error]:", e.message);
-            }
-          }
+          // 1. Kirim notifikasi realtime ke channel publik
+          sendChannelRealtimeOtp({
+            serviceName: sess.serviceName,
+            phone: sess.phone,
+            otp: otp,
+            trxId: sess.trxId || orderId,
+          }).catch(() => {});
+
+          // 2. Kirim laporan order lengkap ke channel khusus admin
+          const userObj = db.getUser(uid);
+          const username = userObj?.username || `api_user_${uid}`;
+          const isWa = ["wahub", "engineunicorn"].includes(sess.provider);
+          sendChannelOrderReport({
+            type: isWa ? "WHATSAPP" : "SMS",
+            username,
+            userId: uid,
+            saldo: db.getCoin(uid),
+            serviceName: sess.serviceName,
+            phone: sess.phone,
+            harga: sess.hargaUser,
+            modal: sess.providerPrice || sess.hargaDasar || 0,
+            otp: otp,
+            serverName: getProviderLabel(sess.provider || "wahub"),
+            isNewOrder: false,
+          }).catch(() => {});
         }
       }
 
