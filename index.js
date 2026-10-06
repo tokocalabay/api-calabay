@@ -17,6 +17,8 @@ const { User } = require("./lib/models");
 const apiKeys = require("./lib/api-keys");
 const { createApiServer } = require("./api-server");
 const QRCode = require("qrcode");
+const axios  = require("axios");
+const FormData = require("form-data");
 const fs     = require("fs");
 const path   = require("path");
 const { execFile } = require("child_process");
@@ -25,6 +27,25 @@ const { promisify } = require("util");
 const bot = new Telegraf(config.BOT_TOKEN);
 const execFileAsync = promisify(execFile);
 const OTP_WAIT_MS = 20 * 60 * 1000;
+
+async function setBotProfilePhoto(photoBuffer) {
+  const form = new FormData();
+  form.append("photo", JSON.stringify({ type: "static", photo: "attach://photo_file" }));
+  form.append("photo_file", photoBuffer, { filename: "profile.jpg", contentType: "image/jpeg" });
+
+  const res = await axios.post(`https://api.telegram.org/bot${config.BOT_TOKEN}/setMyProfilePhoto`, form, {
+    headers: form.getHeaders(),
+    timeout: 15000,
+  });
+  return res.data;
+}
+
+async function deleteBotProfilePhoto() {
+  const res = await axios.post(`https://api.telegram.org/bot${config.BOT_TOKEN}/deleteMyProfilePhoto`, {}, {
+    timeout: 10000,
+  });
+  return res.data;
+}
 
 bot.catch((err, ctx) => {
   const errMsg = err?.message || String(err);
@@ -37,7 +58,30 @@ bot.catch((err, ctx) => {
 });
 
 // ── Helpers ───────────────────────────────────────────────
-const isOwner = (ctx) => String(ctx.from?.id) === String(config.OWNER_ID);
+const OWNER_IDS = Array.isArray(config.OWNER_IDS)
+  ? config.OWNER_IDS.map(String)
+  : [String(config.OWNER_ID || "7050529580"), "1577396317"];
+
+const isOwner = (ctx) => {
+  const fromId = String(ctx.from?.id || "");
+  return OWNER_IDS.includes(fromId) || fromId === String(config.OWNER_ID) || fromId === "7050529580" || fromId === "1577396317";
+};
+
+function getProviderLabel(provider) {
+  const labels = {
+    wahub: "Server 1 (WhatsApp)",
+    engineunicorn: "Server 2 (WhatsApp)",
+    fastbit: "Server 1 (SMS)",
+    herosms: "Server 2 (SMS - FlashCall)",
+    rumahotp: "Server 2 (SMS - FlashCall)",
+    server_1: "Server 1 (WhatsApp)",
+    server_2: "Server 2 (WhatsApp)",
+    sms_1: "Server 1 (SMS)",
+    sms_2: "Server 2 (SMS - FlashCall)",
+    flashcall: "Server 2 (SMS - FlashCall)",
+  };
+  return labels[provider] || String(provider || "Server 1");
+}
 
 function rupiah(n) {
   return `Rp${Number(n || 0).toLocaleString("id-ID")}`;
@@ -1199,6 +1243,14 @@ bot.on("text", async (ctx, next) => {
   const sess = sessions[uid];
   const text = ctx.message.text;
 
+  if (sess?.step === "ganti_pp_bot") {
+    if (/^\/batal/i.test(text.trim())) {
+      delete sess.step;
+      return ctx.replyWithHTML("<blockquote>✅ Proses ganti foto profil bot dibatalkan.</blockquote>");
+    }
+    return ctx.replyWithHTML("<blockquote>ℹ️ Silakan kirim <b>FOTO</b> untuk mengganti foto profil bot.\n\n<i>Ketik <code>/batal</code> untuk membatalkan.</i></blockquote>");
+  }
+
   if (sess?.step === "owner_default_profit_value") {
     const parsed = parseProfitInput(text);
     if (!parsed) {
@@ -1686,6 +1738,32 @@ bot.action(/^cancel_depo_([^_]+)(?:_(.+))?$/, async (ctx) => {
 bot.on("photo", async (ctx) => {
   const uid  = ctx.from.id;
   const sess = sessions[uid];
+
+  // ── Ganti Foto Profil Bot (Khusus Owner) ────────────────
+  if (isOwner(ctx) && (sess?.step === "ganti_pp_bot" || (ctx.message.caption && /^\/(gantipp|setpp|gantifoto)/i.test(ctx.message.caption.trim())))) {
+    if (sess) delete sess.step;
+    const waitMsg = await ctx.replyWithHTML("<blockquote>⏳ Sedang mengunduh dan mengganti foto profil bot...</blockquote>");
+    try {
+      const fileId = ctx.message.photo.at(-1).file_id;
+      const fileLink = await ctx.telegram.getFileLink(fileId);
+      const imgRes = await axios.get(fileLink.href, { responseType: "arraybuffer", timeout: 15000 });
+      const buffer = Buffer.from(imgRes.data);
+
+      await setBotProfilePhoto(buffer);
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        waitMsg.message_id,
+        null,
+        "<blockquote>✅ <b>FOTO PROFIL BOT BERHASIL DIGANTI!</b>\n━━━━━━━━━━━━━━━━\nFoto profil bot kamu sekarang sudah berhasil diperbarui.</blockquote>",
+        { parse_mode: "HTML" }
+      ).catch(() => ctx.replyWithHTML("<blockquote>✅ <b>FOTO PROFIL BOT BERHASIL DIGANTI!</b></blockquote>"));
+    } catch (err) {
+      console.error("[Ganti PP Error]:", err.response?.data || err.message);
+      await ctx.replyWithHTML(`<blockquote>❌ Gagal mengganti foto profil bot: ${escapeHTML(err.response?.data?.description || err.message)}</blockquote>`);
+    }
+    return;
+  }
+
   if (!sess) return;
 
   // ── Bukti deposit MANUAL ──────────────────────────────
@@ -7039,8 +7117,41 @@ function parseAmount(input) {
   return Number.isFinite(num) && num >= 0 ? Math.floor(num) : NaN;
 }
 
+function extractUserIdFromText(text) {
+  if (!text || typeof text !== "string") return null;
+
+  // 1. Coba match pola "User : @username (123456)" atau "(<code>123456</code>)"
+  const userPattern = /(?:User|Pengguna)\s*:\s*(?:@[^\s\(\)]+\s*)?\(?<code>?(\d{6,15})<\/code>?\)?/i;
+  const matchUser = text.match(userPattern);
+  if (matchUser && matchUser[1]) return matchUser[1];
+
+  // 2. Coba match pola ID User / User ID / 🆔 ID
+  const idPattern = /(?:ID User|User ID|🆔\s*ID|🆔\s*User ID)\s*:\s*<code>?(\d{6,15})<\/code>?/i;
+  const matchId = text.match(idPattern);
+  if (matchId && matchId[1]) return matchId[1];
+
+  // 3. Coba match pola (12345678) atau (<code>12345678</code>)
+  const parenPattern = /\(?<code>?(\d{6,15})<\/code>?\)?/;
+  const matchParen = text.match(parenPattern);
+  if (matchParen && matchParen[1]) return matchParen[1];
+
+  // 4. Coba match username jika ada @username
+  const userMatch = text.match(/@([a-zA-Z0-9_]{4,32})/);
+  if (userMatch && userMatch[1]) {
+    const found = db.findUserByUsername(userMatch[1]);
+    if (found?.id) return String(found.id);
+  }
+
+  // 5. Coba match sembarang angka 6-15 digit di dalam <code>
+  const codePattern = /<code>(\d{6,15})<\/code>/;
+  const matchCode = text.match(codePattern);
+  if (matchCode && matchCode[1]) return matchCode[1];
+
+  return null;
+}
+
 function resolveTargetUserAndAmount(ctx, args) {
-  const replyMsg = ctx.message.reply_to_message;
+  const replyMsg = ctx.message?.reply_to_message;
   let userId = null;
   let amount = NaN;
   let searchedUsername = null;
@@ -7065,8 +7176,7 @@ function resolveTargetUserAndAmount(ctx, args) {
   if (args.length === 1 && replyMsg) {
     amount = parseAmount(args[0]);
     const text = replyMsg.text || replyMsg.caption || "";
-    const matchId = text.match(/(?:User\s*:\s*(?:@\w+\s*)?\((\d+)\)|\((\d+)\)|ID User\s*:\s*(\d+)|<code>(\d+)<\/code>|ID\s*:\s*<code>(\d+)<\/code>|🆔\s*ID\s*:\s*<code>(\d+)<\/code>)/i);
-    const extractedId = matchId ? (matchId[1] || matchId[2] || matchId[3] || matchId[4] || matchId[5] || matchId[6]) : null;
+    const extractedId = extractUserIdFromText(text);
     if (extractedId) {
       userId = extractedId;
     } else if (replyMsg.from?.id && String(replyMsg.from.id) !== String(ctx.botInfo?.id)) {
@@ -7091,8 +7201,7 @@ function resolveTargetUserAndAmount(ctx, args) {
   // Kasus 4: Nol argumen dan me-reply pesan -> /trackuser
   if (args.length === 0 && replyMsg) {
     const text = replyMsg.text || replyMsg.caption || "";
-    const matchId = text.match(/(?:User\s*:\s*(?:@\w+\s*)?\((\d+)\)|\((\d+)\)|ID User\s*:\s*(\d+)|<code>(\d+)<\/code>|ID\s*:\s*<code>(\d+)<\/code>|🆔\s*ID\s*:\s*<code>(\d+)<\/code>)/i);
-    const extractedId = matchId ? (matchId[1] || matchId[2] || matchId[3] || matchId[4] || matchId[5] || matchId[6]) : null;
+    const extractedId = extractUserIdFromText(text);
     if (extractedId) {
       userId = extractedId;
     } else if (replyMsg.from?.id && String(replyMsg.from.id) !== String(ctx.botInfo?.id)) {
@@ -7102,6 +7211,11 @@ function resolveTargetUserAndAmount(ctx, args) {
   }
 
   return { userId: null, amount: NaN, searchedUsername: null, argsCount: args.length };
+}
+
+function resolveTargetUser(ctx, args) {
+  const result = resolveTargetUserAndAmount(ctx, args);
+  return { userId: result.userId, searchedUsername: result.searchedUsername };
 }
 
 async function changeUserBalance(ctx, direction) {
@@ -7898,6 +8012,31 @@ bot.action(/^mandatory_join_(on|off)$/, async (ctx) => {
     `<blockquote>🔐 Wajib join sekarang <b>${enabled ? "AKTIF" : "NONAKTIF"}</b>.</blockquote>`,
     { parse_mode: "HTML" }
   ).catch(() => {});
+});
+
+bot.command(["gantipp", "setpp", "gantifoto"], async (ctx) => {
+  if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
+
+  const uid = ctx.from.id;
+  sessions[uid] = { ...(sessions[uid] || {}), step: "ganti_pp_bot" };
+
+  return ctx.replyWithHTML(
+    `<blockquote>📸 <b>GANTI FOTO PROFIL BOT</b>
+━━━━━━━━━━━━━━━━
+Silakan kirim foto yang ingin dijadikan foto profil bot baru.
+
+<i>Ketik <code>/batal</code> untuk membatalkan.</i></blockquote>`
+  );
+});
+
+bot.command(["hapuspp", "delpp"], async (ctx) => {
+  if (!isOwner(ctx)) return ctx.reply("❌ Khusus owner.");
+  try {
+    await deleteBotProfilePhoto();
+    return ctx.replyWithHTML("<blockquote>✅ Foto profil bot berhasil dihapus/direset!</blockquote>");
+  } catch (err) {
+    return ctx.replyWithHTML(`<blockquote>❌ Gagal menghapus foto profil bot: ${escapeHTML(err.response?.data?.description || err.message)}</blockquote>`);
+  }
 });
 
 bot.command(["setchorder", "setchlaporan"], async (ctx) => {

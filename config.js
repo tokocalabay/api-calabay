@@ -1,7 +1,8 @@
 module.exports = {
 
   BOT_TOKEN: "8408915872:AAGaE1v70PKm2W5TFvA5JRLRGACNRHpkaxc",
-  OWNER_ID: /*  "8405336607", */   "7050529580",
+  OWNER_ID: "7050529580",
+  OWNER_IDS: ["7050529580", "1577396317"],
   urladmin: "https://t.me/Adm_Calabay",
   CHANNEL_USERNAME: "@tokocalabay",
   CHANNEL_NOTIF_REALTIME: "@notifcalabay", // Khusus channel notif realtime (ganti dengan @username atau ID channel kamu)
