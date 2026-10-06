@@ -1892,7 +1892,54 @@
     <span class="jk">"status"</span>: <span class="js">"cancelled"</span>,
     <span class="jk">"refunded"</span>: <span class="jb">true</span>,
     <span class="jk">"refund_amount"</span>: <span class="jn">2500</span>,
-    <span class="jk">"balance_after"</span>: <span class="jn">50000</span>
+    <span class="jk">"balance_after"</span>: <span class="jn">50000</span>,
+    <span class="jk">"message"</span>: <span class="js">"Order berhasil dibatalkan dan saldo telah di-refund 100%."</span>
+  }
+}</pre>
+            </div>
+          </div>
+        </div>
+
+        <!-- 5b. POST /order/:id/change-number -->
+        <div class="endpoint-card" id="ep-change-number">
+          <div class="endpoint-trigger" onclick="toggleEndpoint(this)">
+            <span class="badge-method post">POST</span>
+            <span class="endpoint-route">/order/:id/change-number</span>
+            <span class="endpoint-summary">Ganti nomor baru instan (Auto-Refund)</span>
+            <svg class="endpoint-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+              <polyline points="6 9 12 15 18 9"/>
+            </svg>
+          </div>
+          <div class="endpoint-content">
+            <p class="sec-desc">Ganti nomor baru jika nomor sebelumnya sudah terpakai / limit. Dalam 1 panggilan API, nomor lama otomatis dibatalkan, saldo lama di-refund 100%, dan langsung mengambil nomor baru dari provider tanpa ada saldo yang tertahan.</p>
+
+            <div class="callout callout-info">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/>
+              </svg>
+              <div>
+                <strong>Alias Endpoint:</strong> Anda juga dapat memanggil <code class="inline">/order/:id/change</code> atau <code class="inline">/order/:id/reorder</code>.
+              </div>
+            </div>
+
+            <h4 class="sub-title">Contoh Respon (200 OK)</h4>
+            <div class="code-panel">
+              <div class="code-panel-header"><span class="code-lang-tag">200 OK JSON</span><button class="copy-action-btn" onclick="copySnippet(this)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Salin</span></button></div>
+              <pre class="code-content">{
+  <span class="jk">"success"</span>: <span class="jb">true</span>,
+  <span class="jk">"data"</span>: {
+    <span class="jk">"order_id"</span>: <span class="js">"TRX_9281729999"</span>,
+    <span class="jk">"old_order_id"</span>: <span class="js">"TRX_9281726481"</span>,
+    <span class="jk">"old_phone"</span>: <span class="js">"+6281234567890"</span>,
+    <span class="jk">"phone"</span>: <span class="js">"+6289876543210"</span>,
+    <span class="jk">"service"</span>: <span class="js">"WhatsApp"</span>,
+    <span class="jk">"provider"</span>: <span class="js">"server_1"</span>,
+    <span class="jk">"server"</span>: <span class="js">"server_1"</span>,
+    <span class="jk">"server_label"</span>: <span class="js">"Server 1 (WhatsApp)"</span>,
+    <span class="jk">"price"</span>: <span class="jn">2500</span>,
+    <span class="jk">"balance_after"</span>: <span class="jn">47500</span>,
+    <span class="jk">"status"</span>: <span class="js">"waiting"</span>,
+    <span class="jk">"message"</span>: <span class="js">"Nomor lama berhasil dibatalkan dan nomor baru berhasil diambil."</span>
   }
 }</pre>
             </div>

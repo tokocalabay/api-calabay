@@ -1216,9 +1216,27 @@ router.get("/order/:id", authMiddleware, async (req, res) => {
             const stateVal = result.state || result.status || "";
             if (["failed", "error", "cancelled", "canceled", "expired"].includes(stateVal)) {
               status = stateVal;
+              if (!sess.hasReceivedOtp && !sess.paidAt && sess.status !== "paid") {
+                sess.status = "cancelled";
+                sess.providerStatus = stateVal;
+                sess.step = "selesai";
+                db.refundTransaction(sess.trxId, uid);
+                await db.persistUser(uid);
+                wahubSessionDb.set(uid, sess);
+              }
             }
           }
         } catch (e) {}
+      }
+
+      // Auto-cancel & refund jika sudah lewat waktu kadaluarsa (timeout)
+      if (status === "waiting" && sess.expiresAt && Date.now() >= sess.expiresAt && !sess.hasReceivedOtp && !sess.paidAt) {
+        status = "expired";
+        sess.status = "expired";
+        sess.step = "selesai";
+        db.refundTransaction(sess.trxId, uid);
+        await db.persistUser(uid);
+        wahubSessionDb.set(uid, sess);
       }
 
       if (otp) {
@@ -1332,28 +1350,25 @@ router.post("/order/:id/cancel", authMiddleware, async (req, res) => {
       });
     }
 
-    if (!["waiting"].includes(sess.status)) {
-      return res.status(409).json({
-        success: false,
-        error: { code: "INVALID_STATUS", message: `Order berstatus '${sess.status}' dan tidak dapat dibatalkan.` },
-      });
-    }
-
     // Cancel at provider
     let cancelled = false;
-    if (sess.provider === "engineunicorn") {
-      const result = await engineunicorn.cancel(sess.orderId);
-      cancelled = result?.confirmed;
-    } else if (sess.provider === "fastbit") {
-      cancelled = await fastbit.cancelOrder(sess.orderId || sess.orderUuid);
-    } else if (sess.provider === "herosms" || sess.provider === "rumahotp" || sess.provider === "flashcall") {
-      cancelled = await herosms.cancelOrder(sess.orderId);
-    } else {
-      const result = await wahub.cancel(sess.orderId, sess.token);
-      cancelled = result?.ok;
+    try {
+      if (sess.provider === "engineunicorn") {
+        const result = await engineunicorn.cancel(sess.orderId);
+        cancelled = result?.confirmed || true;
+      } else if (sess.provider === "fastbit") {
+        cancelled = await fastbit.cancelOrder(sess.orderId || sess.orderUuid);
+      } else if (sess.provider === "herosms" || sess.provider === "rumahotp" || sess.provider === "flashcall") {
+        cancelled = await herosms.cancelOrder(sess.orderId);
+      } else {
+        const result = await wahub.cancel(sess.orderId, sess.token);
+        cancelled = result?.ok;
+      }
+    } catch (cErr) {
+      console.error("[Cancel Provider Error]:", cErr.message);
     }
 
-    // Refund
+    // Refund saldo langsung 100%
     const refundResult = db.refundTransaction(sess.trxId, uid);
     await db.persistUser(uid);
     const refunded = refundResult?.refunded || refundResult?.alreadyRefunded || false;
@@ -1373,6 +1388,7 @@ router.post("/order/:id/cancel", authMiddleware, async (req, res) => {
         refunded,
         refund_amount: refundAmount,
         balance_after: db.getCoin(uid),
+        message: "Order berhasil dibatalkan dan saldo telah di-refund 100%.",
       },
     });
   } catch (error) {
@@ -1382,6 +1398,433 @@ router.post("/order/:id/cancel", authMiddleware, async (req, res) => {
     });
   }
 });
+
+// ── POST /api/v1/order/:id/change-number ─────────────────────
+// Ganti nomor baru secara instan (Batalkan nomor lama + ambil nomor baru seketika tanpa saldo ketahan)
+const changeNumberHandler = async (req, res) => {
+  try {
+    const uid = req.apiUserId;
+    const orderId = req.params.id;
+    const apiUser = db.getUser(uid);
+    const apiUsername = apiUser?.username || "api_user";
+
+    const sess = wahubSessionDb.find(uid, orderId);
+    if (!sess) {
+      return res.status(404).json({
+        success: false,
+        error: { code: "ORDER_NOT_FOUND", message: "Order tidak ditemukan atau sudah selesai." },
+      });
+    }
+
+    if (sess.hasReceivedOtp || sess.paidAt || sess.status === "paid") {
+      return res.status(409).json({
+        success: false,
+        error: { code: "ALREADY_PAID", message: "Order sudah menerima OTP dan tidak dapat diganti." },
+      });
+    }
+
+    const provider = sess.provider;
+    const serviceId = sess.serviceId;
+    const countryId = sess.countryId;
+    const operatorId = sess.operatorId;
+    const oldPhone = sess.phone;
+
+    // 1. Batalkan order lama di provider
+    try {
+      if (provider === "engineunicorn") {
+        await engineunicorn.cancel(sess.orderId);
+      } else if (provider === "fastbit") {
+        await fastbit.cancelOrder(sess.orderId || sess.orderUuid);
+      } else if (provider === "herosms" || provider === "rumahotp" || provider === "flashcall") {
+        await herosms.cancelOrder(sess.orderId);
+      } else {
+        await wahub.cancel(sess.orderId, sess.token);
+      }
+    } catch (cErr) {
+      console.error("[ChangeNumber Cancel Error]:", cErr.message);
+    }
+
+    // 2. Refund transaksi lama
+    db.refundTransaction(sess.trxId, uid);
+    await db.persistUser(uid);
+
+    // Tandai sesi lama selesai diganti
+    sess.status = "replaced";
+    sess.step = "selesai";
+    sess.replacedAt = new Date().toISOString();
+    wahubSessionDb.set(uid, sess);
+
+    // 3. Ambil nomor baru dari provider yang sama
+    let newOrder, providerPrice, serviceName;
+    const expiryMs = Date.now() + 20 * 60 * 1000;
+
+    if (provider === "wahub") {
+      const services = await wahub.getServices();
+      const svc = services.find((s) => String(s.id) === String(serviceId));
+      if (!svc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: "SERVICE_NOT_FOUND", message: "Layanan tidak ditemukan untuk order ulang." },
+          refunded: true,
+          balance_after: db.getCoin(uid),
+        });
+      }
+      providerPrice = svc.price;
+      serviceName = svc.name;
+      const price = db.calculatePrice("wahub", providerPrice, svc.id, uid);
+      const coin = db.getCoin(uid);
+      if (coin < price) {
+        return res.status(402).json({
+          success: false,
+          error: { code: "INSUFFICIENT_BALANCE", message: "Saldo tidak cukup untuk mengambil nomor baru." },
+          refunded: true,
+          balance_after: coin,
+        });
+      }
+      db.deductCoin(uid, price);
+      await db.persistUser(uid);
+
+      newOrder = await wahub.rent(svc.id);
+      if (!newOrder?.order_id || !newOrder.phone) {
+        db.addCoin(uid, price);
+        await db.persistUser(uid);
+        return res.status(502).json({
+          success: false,
+          error: { code: "ORDER_FAILED", message: wahub.getLastError() || "Gagal mengambil nomor baru (stok habis). Nomor lama sudah di-refund." },
+          refunded: true,
+          balance_after: db.getCoin(uid),
+        });
+      }
+
+      const newTrxId = db.addTransaction({
+        userId: uid, username: apiUsername, orderId: newOrder.order_id,
+        phone: newOrder.phone, productName: serviceName, negara: "Indonesia",
+        harga: price, provider: "wahub", serviceId: svc.id, providerPrice,
+      });
+
+      const newSess = {
+        userId: uid,
+        step: "tunggu_otp", status: "waiting", providerStatus: "waiting",
+        provider: "wahub", createdAt: new Date().toISOString(),
+        serviceId: svc.id, serviceName, hargaUser: price, providerPrice,
+        orderId: newOrder.order_id, token: newOrder.token, phone: newOrder.phone,
+        expiresAt: expiryMs, cancelAt: 0, retryCount: 0, trxId: newTrxId,
+        sessionKey: newTrxId, source: "api",
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) {}
+      }
+
+      sendChannelOrderReport({
+        type: "WHATSAPP",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: newOrder.phone,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel("wahub"),
+        isNewOrder: true,
+      }).catch(() => {});
+
+      return res.json({
+        success: true,
+        data: {
+          order_id: newTrxId,
+          old_order_id: orderId,
+          old_phone: oldPhone,
+          phone: newOrder.phone,
+          service: serviceName,
+          provider: "server_1",
+          server: "server_1",
+          server_label: "Server 1 (WhatsApp)",
+          price,
+          balance_after: db.getCoin(uid),
+          expires_at: new Date(expiryMs).toISOString(),
+          status: "waiting",
+          message: "Nomor lama berhasil dibatalkan dan nomor baru berhasil diambil.",
+        },
+      });
+    }
+
+    if (provider === "engineunicorn") {
+      const services = await engineunicorn.getServices();
+      const svc = services.find((s) => String(s.id) === String(serviceId));
+      if (!svc) {
+        return res.status(404).json({
+          success: false,
+          error: { code: "SERVICE_NOT_FOUND", message: "Layanan Server 2 tidak ditemukan." },
+          refunded: true,
+          balance_after: db.getCoin(uid),
+        });
+      }
+      providerPrice = svc.price;
+      serviceName = svc.name;
+      const price = db.calculatePrice("engineunicorn", providerPrice, svc.id, uid);
+      const coin = db.getCoin(uid);
+      if (coin < price) {
+        return res.status(402).json({
+          success: false,
+          error: { code: "INSUFFICIENT_BALANCE", message: "Saldo tidak cukup." },
+          refunded: true,
+          balance_after: coin,
+        });
+      }
+      db.deductCoin(uid, price);
+      await db.persistUser(uid);
+
+      newOrder = await engineunicorn.rent(svc.id);
+      if (!newOrder?.order_id || !newOrder.phone) {
+        db.addCoin(uid, price);
+        await db.persistUser(uid);
+        return res.status(502).json({
+          success: false,
+          error: { code: "ORDER_FAILED", message: engineunicorn.getLastError() || "Gagal mengambil nomor baru di Server 2. Nomor lama sudah di-refund." },
+          refunded: true,
+          balance_after: db.getCoin(uid),
+        });
+      }
+
+      const newTrxId = db.addTransaction({
+        userId: uid, username: apiUsername, orderId: newOrder.order_id,
+        phone: newOrder.phone, productName: serviceName, negara: "Indonesia",
+        harga: price, provider: "engineunicorn", serviceId: svc.id, providerPrice,
+      });
+
+      const newSess = {
+        userId: uid,
+        step: "tunggu_otp", status: "waiting", providerStatus: "waiting",
+        provider: "engineunicorn", createdAt: new Date().toISOString(),
+        serviceId: svc.id, serviceName, hargaUser: price, providerPrice,
+        orderId: newOrder.order_id, token: newOrder.token || newOrder.order_id,
+        phone: newOrder.phone, expiresAt: expiryMs, cancelAt: 0, retryCount: 0,
+        trxId: newTrxId, sessionKey: newTrxId, source: "api",
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) {}
+      }
+
+      sendChannelOrderReport({
+        type: "WHATSAPP",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: newOrder.phone,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel("engineunicorn"),
+        isNewOrder: true,
+      }).catch(() => {});
+
+      return res.json({
+        success: true,
+        data: {
+          order_id: newTrxId,
+          old_order_id: orderId,
+          old_phone: oldPhone,
+          phone: newOrder.phone,
+          service: serviceName,
+          provider: "server_2",
+          server: "server_2",
+          server_label: "Server 2 (WhatsApp)",
+          price,
+          balance_after: db.getCoin(uid),
+          expires_at: new Date(expiryMs).toISOString(),
+          status: "waiting",
+          message: "Nomor lama berhasil dibatalkan dan nomor baru berhasil diambil.",
+        },
+      });
+    }
+
+    if (provider === "fastbit") {
+      const services = await fastbit.getServices();
+      const svc = services.find((s) => String(s.id) === String(serviceId));
+      serviceName = svc?.name || `SMS - ${serviceId}`;
+      const offers = await fastbit.getServiceOffers(serviceId);
+      const chosenOffer = offers.find((o) => o.operator === operatorId) || offers[0];
+      providerPrice = Number(chosenOffer?.price || 0);
+      const price = db.calculatePrice("fastbit", providerPrice, serviceId, uid);
+      const coin = db.getCoin(uid);
+      if (coin < price) {
+        return res.status(402).json({
+          success: false,
+          error: { code: "INSUFFICIENT_BALANCE", message: "Saldo tidak cukup." },
+          refunded: true,
+          balance_after: coin,
+        });
+      }
+      db.deductCoin(uid, price);
+      await db.persistUser(uid);
+
+      newOrder = await fastbit.orderService(serviceId, operatorId, "sms");
+      if (!newOrder?.order_uuid || !newOrder.phone_number) {
+        db.addCoin(uid, price);
+        await db.persistUser(uid);
+        return res.status(502).json({
+          success: false,
+          error: { code: "ORDER_FAILED", message: fastbit.getLastError() || "Gagal mengambil nomor SMS baru. Nomor lama sudah di-refund." },
+          refunded: true,
+          balance_after: db.getCoin(uid),
+        });
+      }
+
+      const newTrxId = db.addTransaction({
+        userId: uid, username: apiUsername, orderId: newOrder.order_uuid,
+        phone: newOrder.phone_number, productName: serviceName, negara: "Indonesia",
+        harga: price, provider: "fastbit", serviceId, countryId: countryId || "ID",
+        operatorId: chosenOffer?.operator || operatorId || "", providerPrice,
+      });
+
+      const newSess = {
+        userId: uid, step: "tunggu_otp", status: "waiting", providerStatus: "waiting",
+        provider: "fastbit", createdAt: new Date().toISOString(),
+        serviceId, serviceName, hargaUser: price, providerPrice,
+        orderId: newOrder.order_uuid, orderUuid: newOrder.order_uuid,
+        numericOrderId: newOrder.order_id, token: newOrder.order_uuid,
+        phone: newOrder.phone_number, expiresAt: newOrder.expired_at || expiryMs,
+        cancelAt: 0, retryCount: 0, trxId: newTrxId, sessionKey: newTrxId,
+        source: "api", verificationType: "sms",
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) {}
+      }
+
+      sendChannelOrderReport({
+        type: "SMS",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: newOrder.phone_number,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel("fastbit"),
+        isNewOrder: true,
+      }).catch(() => {});
+
+      return res.json({
+        success: true,
+        data: {
+          order_id: newTrxId,
+          old_order_id: orderId,
+          old_phone: oldPhone,
+          phone: newOrder.phone_number,
+          service: serviceName,
+          provider: "sms_1",
+          server: "sms_1",
+          server_label: "Server 1 (SMS)",
+          price,
+          balance_after: db.getCoin(uid),
+          expires_at: new Date(newSess.expiresAt).toISOString(),
+          status: "waiting",
+          message: "Nomor lama berhasil dibatalkan dan nomor baru berhasil diambil.",
+        },
+      });
+    }
+
+    if (provider === "herosms" || provider === "rumahotp") {
+      const price_info = await herosms.getPrices(serviceId, countryId || "0");
+      providerPrice = herosms.toIdrPrice(price_info?.price || price_info?.cost || 0);
+      serviceName = `SMS - ${serviceId}`;
+      const price = db.calculatePrice(provider, providerPrice, serviceId, uid);
+      const coin = db.getCoin(uid);
+      if (coin < price) {
+        return res.status(402).json({
+          success: false,
+          error: { code: "INSUFFICIENT_BALANCE", message: "Saldo tidak cukup." },
+          refunded: true,
+          balance_after: coin,
+        });
+      }
+      db.deductCoin(uid, price);
+      await db.persistUser(uid);
+
+      newOrder = await herosms.createOrder(serviceId, countryId || "0", operatorId);
+      if (!newOrder?.order_id || !newOrder.phone_number) {
+        db.addCoin(uid, price);
+        await db.persistUser(uid);
+        return res.status(502).json({
+          success: false,
+          error: { code: "ORDER_FAILED", message: herosms.getLastError() || "Gagal mengambil nomor baru. Nomor lama sudah di-refund." },
+          refunded: true,
+          balance_after: db.getCoin(uid),
+        });
+      }
+
+      const newTrxId = db.addTransaction({
+        userId: uid, username: apiUsername, orderId: newOrder.order_id,
+        phone: newOrder.phone_number, productName: serviceName, negara: countryId || "Indonesia",
+        harga: price, provider, serviceId, countryId, operatorId: operatorId || "", providerPrice,
+      });
+
+      const newSess = {
+        userId: uid, step: "tunggu_otp", status: "waiting", providerStatus: "waiting",
+        provider, createdAt: new Date().toISOString(),
+        serviceId, serviceName, hargaUser: price, providerPrice,
+        orderId: newOrder.order_id, token: newOrder.order_id,
+        phone: newOrder.phone_number, expiresAt: expiryMs, cancelAt: 0, retryCount: 0,
+        trxId: newTrxId, sessionKey: newTrxId, source: "api", verificationType: "sms",
+      };
+      wahubSessionDb.set(uid, newSess);
+      if (typeof apiCallbacks.onOrderCreated === "function") {
+        try { apiCallbacks.onOrderCreated(newSess); } catch (e) {}
+      }
+
+      sendChannelOrderReport({
+        type: "SMS",
+        username: apiUsername,
+        userId: uid,
+        saldo: db.getCoin(uid),
+        serviceName,
+        phone: newOrder.phone_number,
+        harga: price,
+        modal: providerPrice,
+        serverName: getProviderLabel(provider),
+        isNewOrder: true,
+      }).catch(() => {});
+
+      return res.json({
+        success: true,
+        data: {
+          order_id: newTrxId,
+          old_order_id: orderId,
+          old_phone: oldPhone,
+          phone: newOrder.phone_number,
+          service: serviceName,
+          provider: getPublicProviderCode(provider),
+          server: getPublicProviderCode(provider),
+          server_label: getProviderLabel(provider),
+          price,
+          balance_after: db.getCoin(uid),
+          expires_at: new Date(expiryMs).toISOString(),
+          status: "waiting",
+          message: "Nomor lama berhasil dibatalkan dan nomor baru berhasil diambil.",
+        },
+      });
+    }
+
+    return res.status(400).json({
+      success: false,
+      error: { code: "UNSUPPORTED_PROVIDER", message: "Provider tidak didukung untuk ganti nomor." },
+    });
+  } catch (error) {
+    console.error("[ChangeNumber Error]:", error);
+    res.status(500).json({
+      success: false,
+      error: { code: "INTERNAL_ERROR", message: error.message },
+    });
+  }
+};
+
+router.post("/order/:id/change-number", authMiddleware, changeNumberHandler);
+router.post("/order/:id/change", authMiddleware, changeNumberHandler);
+router.post("/order/:id/reorder", authMiddleware, changeNumberHandler);
+router.post("/order/:id/ganti-nomor", authMiddleware, changeNumberHandler);
 
 // ── POST /api/v1/order/:id/retry ────────────────────────────
 // Retry OTP (WhatsApp only)
